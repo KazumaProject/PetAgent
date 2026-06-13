@@ -1,0 +1,49 @@
+{
+  "formatVersion": 1,
+  "petId": "default_african_scops_owl",
+  "displayName": "African Scops Owl",
+  "species": "african_scops_owl_mascot",
+  "author": "Default",
+  "description": "Anime-style game pet based on African scops owl features: sharp outward ear tufts, orange iris rings, white facial disks, black cheek arcs, compact vertical body, and soft gray-brown streaking.",
+  "defaultSizeDp": 72,
+  "minSizeDp": 56,
+  "maxSizeDp": 128,
+  "anchor": {
+    "x": 0.5,
+    "y": 0.88
+  },
+  "hitbox": {
+    "x": 0.18,
+    "y": 0.08,
+    "width": 0.64,
+    "height": 0.82
+  },
+  "personality": {
+    "shyness": 0.48,
+    "curiosity": 0.82,
+    "playfulness": 0.5,
+    "sleepiness": 0.55,
+    "helpfulness": 0.86,
+    "talkativeness": 0.34
+  },
+  "visualRules": {
+    "style": "anime game pet, cute but owl-like",
+    "mustKeep": [
+      "large round orange iris rings with black pupils",
+      "outward pointed ear tufts",
+      "white facial disks",
+      "black crescent cheek markings",
+      "short gray beak between eyes",
+      "compact upright owl body",
+      "soft gray-brown feather streaks simplified for small overlay display"
+    ],
+    "avoid": [
+      "human-like face",
+      "predator glare",
+      "overly realistic feather density",
+      "creepy huge anime eyes without owl structure",
+      "long legs",
+      "sharp talons as a focal point"
+    ]
+  }
+}

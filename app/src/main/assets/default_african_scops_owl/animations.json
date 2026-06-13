@@ -1,0 +1,123 @@
+{
+  "formatVersion": 1,
+  "frameSize": {
+    "width": 512,
+    "height": 512
+  },
+  "animations": {
+    "idle": {
+      "type": "spritesheet",
+      "file": "sprites/idle.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 8,
+      "loop": true
+    },
+    "blink": {
+      "type": "spritesheet",
+      "file": "sprites/blink.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 4,
+      "fps": 12,
+      "loop": false
+    },
+    "sleep": {
+      "type": "spritesheet",
+      "file": "sprites/sleep.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 6,
+      "fps": 6,
+      "loop": true
+    },
+    "think": {
+      "type": "spritesheet",
+      "file": "sprites/think.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 8,
+      "loop": true
+    },
+    "speak": {
+      "type": "spritesheet",
+      "file": "sprites/speak.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 6,
+      "fps": 10,
+      "loop": true
+    },
+    "happy": {
+      "type": "spritesheet",
+      "file": "sprites/happy.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 6,
+      "fps": 10,
+      "loop": false
+    },
+    "confused": {
+      "type": "spritesheet",
+      "file": "sprites/confused.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 6,
+      "fps": 8,
+      "loop": false
+    },
+    "dragged": {
+      "type": "spritesheet",
+      "file": "sprites/dragged.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 6,
+      "fps": 10,
+      "loop": false
+    },
+    "peek": {
+      "type": "spritesheet",
+      "file": "sprites/peek.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 4,
+      "fps": 6,
+      "loop": false
+    },
+    "look_left": {
+      "type": "spritesheet",
+      "file": "sprites/look_left.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 4,
+      "fps": 8,
+      "loop": false
+    },
+    "look_right": {
+      "type": "spritesheet",
+      "file": "sprites/look_right.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 4,
+      "fps": 8,
+      "loop": false
+    },
+    "land": {
+      "type": "spritesheet",
+      "file": "sprites/land.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 4,
+      "fps": 10,
+      "loop": false
+    }
+  },
+  "fallbacks": {
+    "error": "confused",
+    "wake_up": "blink",
+    "talk": "speak",
+    "question": "think"
+  }
+}
