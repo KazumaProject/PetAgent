@@ -19,11 +19,8 @@ import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
-import com.kazumaproject.petagent.game.PetCareAction
-import com.kazumaproject.petagent.game.PetCareEngine
-import com.kazumaproject.petagent.game.PetCareRepository
-import com.kazumaproject.petagent.game.toUiState
 import com.kazumaproject.petagent.petpack.PetCatalogEntry
 import com.kazumaproject.petagent.petpack.PetCatalogLoader
 import com.kazumaproject.petagent.petpack.PetPack
@@ -39,9 +36,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var petSelector: Spinner
     private lateinit var petSizeLabel: TextView
     private lateinit var petSizeSeekBar: SeekBar
-    private lateinit var careStatusText: TextView
     private val preferences by lazy { PetPreferences.prefs(this) }
-    private val careRepository by lazy { PetCareRepository(this) }
     private var catalogPets: List<PetCatalogEntry> = emptyList()
     private var selectedPetPack: PetPack? = null
     private var suppressSizeCallback = false
@@ -56,7 +51,6 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updatePermissionState()
-        selectedPetPack?.let { updateCareStatus(it) }
     }
 
     override fun onRequestPermissionsResult(
@@ -79,46 +73,155 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "Floating Pet"
+            text = "Floating Pet Agent"
             textSize = 26f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
         }
         val subtitle = TextView(this).apply {
-            text = "Floating AI pet MVP"
+            text = "自律行動と休憩リマインダー"
             textSize = 15f
             gravity = Gravity.CENTER
             setPadding(0, dp(6), 0, dp(22))
         }
 
-        overlayStatus = statusText()
-        notificationStatus = statusText()
+        petSelector = buildPetSelector()
         petSizeLabel = statusText()
         petSizeSeekBar = buildSizeSeekBar()
-        petSelector = buildPetSelector()
-        careStatusText = statusText()
-
-        overlayButton = actionButton("Open Overlay Settings") {
-            openOverlaySettings()
-        }
-        notificationButton = actionButton("Allow Notifications") {
-            requestNotificationPermission()
-        }
-        startButton = actionButton("Start Pet") {
-            startPetIfReady()
-        }
-        val stopButton = actionButton("Stop Pet") {
-            PetForegroundService.stop(this)
-        }
+        overlayStatus = statusText()
+        notificationStatus = statusText()
+        overlayButton = actionButton("Open Overlay Settings") { openOverlaySettings() }
+        notificationButton = actionButton("Allow Notifications") { requestNotificationPermission() }
+        startButton = actionButton("Start Pet") { startPetIfReady() }
+        val stopButton = actionButton("Stop Pet") { PetForegroundService.stop(this) }
 
         root.addView(title, matchWrapParams())
         root.addView(subtitle, matchWrapParams())
+
         root.addView(sectionLabel("Pet"), matchWrapParams())
         root.addView(petSelector, spinnerParams())
         root.addView(petSizeLabel, matchWrapParams())
         root.addView(petSizeSeekBar, matchWrapParams())
-        root.addView(sectionLabel("Pet Care Status"), matchWrapParams())
-        root.addView(careStatusText, matchWrapParams())
+
+        root.addView(sectionLabel("Break Reminder"), matchWrapParams())
+        root.addView(
+            switchRow(
+                label = "休憩リマインダー",
+                key = PetPreferences.KEY_BREAK_REMINDER_ENABLED,
+                defaultValue = PetPreferences.DEFAULT_BREAK_REMINDER_ENABLED,
+            ),
+            matchWrapParams(),
+        )
+        root.addView(settingLabel("提案する間隔"), matchWrapParams())
+        root.addView(
+            intSpinner(
+                values = listOf(15, 25, 30, 45, 60),
+                current = preferences.getInt(
+                    PetPreferences.KEY_BREAK_REMINDER_INTERVAL_MINUTES,
+                    PetPreferences.DEFAULT_BREAK_REMINDER_INTERVAL_MINUTES,
+                ),
+                suffix = "分",
+            ) { value ->
+                saveIntSetting(PetPreferences.KEY_BREAK_REMINDER_INTERVAL_MINUTES, value)
+            },
+            spinnerParams(),
+        )
+        root.addView(settingLabel("あとで通知"), matchWrapParams())
+        root.addView(
+            intSpinner(
+                values = listOf(5, 10, 15, 30),
+                current = preferences.getInt(
+                    PetPreferences.KEY_BREAK_REMINDER_SNOOZE_MINUTES,
+                    PetPreferences.DEFAULT_BREAK_REMINDER_SNOOZE_MINUTES,
+                ),
+                suffix = "分",
+            ) { value ->
+                saveIntSetting(PetPreferences.KEY_BREAK_REMINDER_SNOOZE_MINUTES, value)
+            },
+            spinnerParams(),
+        )
+        root.addView(
+            switchRow(
+                label = "静かにする時間帯",
+                key = PetPreferences.KEY_BREAK_REMINDER_QUIET_HOURS_ENABLED,
+                defaultValue = PetPreferences.DEFAULT_BREAK_REMINDER_QUIET_HOURS_ENABLED,
+            ),
+            matchWrapParams(),
+        )
+        root.addView(settingLabel("静かにする開始時刻"), matchWrapParams())
+        root.addView(
+            intSpinner(
+                values = (0..23).toList(),
+                current = preferences.getInt(
+                    PetPreferences.KEY_BREAK_REMINDER_QUIET_START_HOUR,
+                    PetPreferences.DEFAULT_BREAK_REMINDER_QUIET_START_HOUR,
+                ),
+                suffix = "時",
+            ) { value ->
+                saveIntSetting(PetPreferences.KEY_BREAK_REMINDER_QUIET_START_HOUR, value)
+            },
+            spinnerParams(),
+        )
+        root.addView(settingLabel("静かにする終了時刻"), matchWrapParams())
+        root.addView(
+            intSpinner(
+                values = (0..23).toList(),
+                current = preferences.getInt(
+                    PetPreferences.KEY_BREAK_REMINDER_QUIET_END_HOUR,
+                    PetPreferences.DEFAULT_BREAK_REMINDER_QUIET_END_HOUR,
+                ),
+                suffix = "時",
+            ) { value ->
+                saveIntSetting(PetPreferences.KEY_BREAK_REMINDER_QUIET_END_HOUR, value)
+            },
+            spinnerParams(),
+        )
+        root.addView(actionButton("テスト表示") { PetForegroundService.showTestReminder(this) }, buttonParams())
+
+        root.addView(sectionLabel("Pet Behavior"), matchWrapParams())
+        root.addView(
+            switchRow(
+                label = "自律行動",
+                key = PetPreferences.KEY_AUTONOMOUS_BEHAVIOR_ENABLED,
+                defaultValue = PetPreferences.DEFAULT_AUTONOMOUS_BEHAVIOR_ENABLED,
+            ),
+            matchWrapParams(),
+        )
+        root.addView(
+            switchRow(
+                label = "自律移動",
+                key = PetPreferences.KEY_AUTONOMOUS_MOVE_ENABLED,
+                defaultValue = PetPreferences.DEFAULT_AUTONOMOUS_MOVE_ENABLED,
+            ),
+            matchWrapParams(),
+        )
+        root.addView(settingLabel("動きの頻度"), matchWrapParams())
+        root.addView(
+            stringSpinner(
+                entries = listOf(
+                    "low" to "少ない",
+                    "normal" to "普通",
+                    "high" to "多い",
+                ),
+                current = preferences.getString(
+                    PetPreferences.KEY_AUTONOMOUS_BEHAVIOR_FREQUENCY,
+                    PetPreferences.DEFAULT_AUTONOMOUS_BEHAVIOR_FREQUENCY,
+                ) ?: PetPreferences.DEFAULT_AUTONOMOUS_BEHAVIOR_FREQUENCY,
+            ) { value ->
+                saveStringSetting(PetPreferences.KEY_AUTONOMOUS_BEHAVIOR_FREQUENCY, value)
+            },
+            spinnerParams(),
+        )
+        root.addView(
+            switchRow(
+                label = "休憩前に近づく",
+                key = PetPreferences.KEY_APPROACH_BEFORE_BREAK_ENABLED,
+                defaultValue = PetPreferences.DEFAULT_APPROACH_BEFORE_BREAK_ENABLED,
+            ),
+            matchWrapParams(),
+        )
+
+        root.addView(sectionLabel("Permission / Service"), matchWrapParams())
         root.addView(overlayStatus, matchWrapParams())
         root.addView(notificationStatus, matchWrapParams())
         root.addView(overlayButton, buttonParams())
@@ -186,7 +289,7 @@ class MainActivity : AppCompatActivity() {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                     val petPack = selectedPetPack ?: return
                     val sizeDp = petPack.manifest.minSizeDp + progress
-                    petSizeLabel.text = "Size: $sizeDp dp"
+                    petSizeLabel.text = "Pet size: $sizeDp dp"
                     if (fromUser && !suppressSizeCallback) {
                         savePetSize(petPack, sizeDp)
                         PetForegroundService.updateSettings(this@MainActivity)
@@ -216,31 +319,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         bindPetSize(petPack)
-        updateCareStatus(petPack)
 
         if (notifyService) {
             PetForegroundService.updateSettings(this)
-        }
-    }
-
-    private fun updateCareStatus(petPack: PetPack) {
-        val manifest = petPack.manifest
-        val nowWallClockMs = System.currentTimeMillis()
-        val result = PetCareEngine.reduce(
-            state = careRepository.load(manifest.petId, nowWallClockMs),
-            action = PetCareAction.TimePassed(nowWallClockMs),
-            species = manifest.species,
-        )
-        careRepository.save(result.state)
-        val uiState = result.state.toUiState()
-
-        careStatusText.text = buildString {
-            appendLine("Fullness: ${uiState.fullness}")
-            appendLine("Hydration: ${uiState.hydration}")
-            appendLine("Happiness: ${uiState.happiness}")
-            appendLine("Affection: ${uiState.affection}")
-            appendLine("Level: ${uiState.level}")
-            append("世話はペットをタップして行えます")
         }
     }
 
@@ -251,8 +332,96 @@ class MainActivity : AppCompatActivity() {
         petSizeSeekBar.max = (manifest.maxSizeDp - manifest.minSizeDp).coerceAtLeast(0)
         petSizeSeekBar.progress = savedSizeDp - manifest.minSizeDp
         petSizeSeekBar.isEnabled = manifest.maxSizeDp > manifest.minSizeDp
-        petSizeLabel.text = "Size: $savedSizeDp dp"
+        petSizeLabel.text = "Pet size: $savedSizeDp dp"
         suppressSizeCallback = false
+    }
+
+    private fun switchRow(
+        label: String,
+        key: String,
+        defaultValue: Boolean,
+    ): View {
+        return SwitchCompat(this).apply {
+            text = label
+            textSize = 16f
+            isChecked = preferences.getBoolean(key, defaultValue)
+            setPadding(0, dp(6), 0, dp(6))
+            setOnCheckedChangeListener { _, isChecked ->
+                preferences.edit().putBoolean(key, isChecked).apply()
+                PetForegroundService.updateSettings(this@MainActivity)
+            }
+        }
+    }
+
+    private fun intSpinner(
+        values: List<Int>,
+        current: Int,
+        suffix: String,
+        onSelected: (Int) -> Unit,
+    ): Spinner {
+        val adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            values.map { "$it$suffix" },
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        return Spinner(this).apply {
+            this.adapter = adapter
+            setSelection(values.indexOf(current).takeIf { it >= 0 } ?: 0, false)
+            var initialized = false
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    if (!initialized) {
+                        initialized = true
+                        return
+                    }
+                    onSelected(values[position])
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            }
+        }
+    }
+
+    private fun stringSpinner(
+        entries: List<Pair<String, String>>,
+        current: String,
+        onSelected: (String) -> Unit,
+    ): Spinner {
+        val adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            entries.map { it.second },
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        return Spinner(this).apply {
+            this.adapter = adapter
+            setSelection(entries.indexOfFirst { it.first == current }.takeIf { it >= 0 } ?: 0, false)
+            var initialized = false
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    if (!initialized) {
+                        initialized = true
+                        return
+                    }
+                    onSelected(entries[position].first)
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            }
+        }
+    }
+
+    private fun saveIntSetting(key: String, value: Int) {
+        preferences.edit().putInt(key, value).apply()
+        PetForegroundService.updateSettings(this)
+    }
+
+    private fun saveStringSetting(key: String, value: String) {
+        preferences.edit().putString(key, value).apply()
+        PetForegroundService.updateSettings(this)
     }
 
     private fun selectedPetIndex(): Int {
@@ -348,6 +517,14 @@ class MainActivity : AppCompatActivity() {
             textSize = 17f
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, dp(18), 0, dp(4))
+        }
+    }
+
+    private fun settingLabel(label: String): TextView {
+        return TextView(this).apply {
+            text = label
+            textSize = 15f
+            setPadding(0, dp(8), 0, dp(2))
         }
     }
 

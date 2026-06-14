@@ -45,5 +45,32 @@
       "long legs",
       "sharp talons as a focal point"
     ]
+  },
+  "behaviorProfile": {
+    "species": "african_scops_owl",
+    "movementPlane": "perch",
+    "defaultLocomotion": "perch_shift",
+    "idleBehaviors": ["idle", "blink", "look_left", "look_right", "sleep", "think"],
+    "autonomousBehaviors": [
+      {
+        "id": "owl_head_scan",
+        "animation": "look_left",
+        "minIntervalMs": 15000
+      },
+      {
+        "id": "owl_perch_shift",
+        "animation": "land",
+        "minIntervalMs": 120000
+      },
+      {
+        "id": "owl_sleep",
+        "animation": "sleep",
+        "minIntervalMs": 180000
+      }
+    ],
+    "breakPreparation": {
+      "approachMode": "perch_shift",
+      "leadTimeMinutes": 2
+    }
   }
 }

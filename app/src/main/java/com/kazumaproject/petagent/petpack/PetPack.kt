@@ -56,6 +56,30 @@ data class PetManifest(
     val maxSizeDp: Int,
     val anchor: NormalizedPoint,
     val hitbox: NormalizedRect,
+    val behaviorProfile: PetManifestBehaviorProfile? = null,
+)
+
+data class PetManifestBehaviorProfile(
+    val species: String,
+    val movementPlane: String,
+    val defaultLocomotion: String,
+    val idleBehaviors: List<String>,
+    val autonomousBehaviors: List<PetManifestAutonomousBehavior>,
+    val breakPreparation: PetManifestBreakPreparation?,
+)
+
+data class PetManifestAutonomousBehavior(
+    val id: String,
+    val animation: String?,
+    val animationLeft: String?,
+    val animationRight: String?,
+    val minIntervalMs: Long?,
+    val maxDistanceScreenRatio: Float?,
+)
+
+data class PetManifestBreakPreparation(
+    val approachMode: String,
+    val leadTimeMinutes: Int,
 )
 
 data class FrameSize(

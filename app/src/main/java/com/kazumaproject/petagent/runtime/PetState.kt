@@ -58,6 +58,15 @@ data class NeedState(
     val lastInteractionAtMs: Long,
     val isSleeping: Boolean = false,
     val sleepAfterMs: Long = SLEEP_AFTER_INACTIVITY_MS,
+    val energy: Float = 0.8f,
+    val curiosity: Float = 0.5f,
+    val attention: Float = 0.4f,
+    val calmness: Float = 0.7f,
+    val helpfulness: Float = 0.6f,
+    val boredom: Float = 0.2f,
+    val lastAutonomousMoveAtMs: Long = 0L,
+    val lastAutonomousGestureAtMs: Long = 0L,
+    val lastReminderProposalAtMs: Long = 0L,
 )
 
 sealed interface AgentState {
@@ -95,18 +104,29 @@ enum class PetAttention {
 
 sealed interface PetAction {
     data class FrameTick(val nowMs: Long) : PetAction
+    data class BrainTick(val nowMs: Long) : PetAction
     data class Tap(val nowMs: Long) : PetAction
     data class DragStarted(val nowMs: Long) : PetAction
     data class DragEnded(val nowMs: Long) : PetAction
     data class MinimizedChanged(val minimized: Boolean, val nowMs: Long) : PetAction
     data class AnimationFinished(val animationKey: String, val nowMs: Long) : PetAction
     data class AgentEventReceived(val event: AgentEvent, val nowMs: Long) : PetAction
-    data class CareReactionReceived(
+    data class AutonomousAnimationStarted(
         val animationKey: String,
+        val durationMs: Long,
+        val nowMs: Long,
+    ) : PetAction
+    data class AutonomousMoveStarted(val nowMs: Long) : PetAction
+    data class AutonomousMoveFinished(val nowMs: Long) : PetAction
+    data class BreakReminderShown(val nowMs: Long) : PetAction
+    data class BreakAccepted(val nowMs: Long) : PetAction
+    data class BreakSnoozed(val nowMs: Long) : PetAction
+    data class BreakDismissed(val nowMs: Long) : PetAction
+    data class ReminderProposalPrepared(
         val nowMs: Long,
     ) : PetAction
 }
 
 const val FIRST_BLINK_DELAY_MS = 2_500L
 const val BLINK_INTERVAL_MS = 6_500L
-const val SLEEP_AFTER_INACTIVITY_MS = 30_000L
+const val SLEEP_AFTER_INACTIVITY_MS = 10 * 60_000L

@@ -38,5 +38,29 @@
       "look_left",
       "look_right"
     ]
+  },
+  "behaviorProfile": {
+    "species": "panda",
+    "movementPlane": "floor",
+    "defaultLocomotion": "heavy_walk",
+    "idleBehaviors": ["idle", "blink", "look_left", "look_right", "sit", "sleep"],
+    "autonomousBehaviors": [
+      {
+        "id": "panda_slow_walk",
+        "animationLeft": "walk_left",
+        "animationRight": "walk_right",
+        "minIntervalMs": 90000,
+        "maxDistanceScreenRatio": 0.22
+      },
+      {
+        "id": "panda_sit",
+        "animation": "sit",
+        "minIntervalMs": 45000
+      }
+    ],
+    "breakPreparation": {
+      "approachMode": "slow_walk",
+      "leadTimeMinutes": 2
+    }
   }
 }

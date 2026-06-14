@@ -6,6 +6,7 @@ object PetReducer {
     fun reduce(state: PetState, action: PetAction): PetState {
         return when (action) {
             is PetAction.FrameTick -> onTick(state, action.nowMs)
+            is PetAction.BrainTick -> onBrainTick(state, action.nowMs)
             is PetAction.Tap -> onTap(state, action.nowMs)
             is PetAction.DragStarted -> state.copy(
                 interaction = state.interaction.copy(isPressed = true, isDragging = true),
@@ -26,10 +27,58 @@ object PetReducer {
             )
             is PetAction.AnimationFinished -> onAnimationFinished(state, action.animationKey, action.nowMs)
             is PetAction.AgentEventReceived -> onAgentEvent(state, action.event, action.nowMs)
-            is PetAction.CareReactionReceived -> onCareReaction(
+            is PetAction.AutonomousAnimationStarted -> onAutonomousAnimationStarted(
                 state = state,
                 animationKey = action.animationKey,
+                durationMs = action.durationMs,
                 nowMs = action.nowMs,
+            )
+            is PetAction.AutonomousMoveStarted -> state.copy(
+                need = state.need.copy(lastAutonomousMoveAtMs = action.nowMs, boredom = (state.need.boredom - 0.05f).coerceIn01()),
+                body = state.body.clearTransient(),
+            )
+            is PetAction.AutonomousMoveFinished -> state.copy(
+                body = state.body.clearTransient(),
+                emotion = state.emotion.copy(mood = PetMood.Calm),
+            )
+            is PetAction.BreakReminderShown -> state.copy(
+                body = state.body.withTransient("look_left", action.nowMs, durationMs = 1_400L),
+                need = state.need.copy(lastReminderProposalAtMs = action.nowMs, helpfulness = (state.need.helpfulness + 0.08f).coerceIn01()),
+                emotion = state.emotion.copy(mood = PetMood.Curious, attention = PetAttention.Left),
+                agent = AgentState.Idle,
+            )
+            is PetAction.BreakAccepted -> state.copy(
+                body = state.body.withTransient("happy", action.nowMs, durationMs = 1_500L),
+                need = state.need.copy(
+                    lastInteractionAtMs = action.nowMs,
+                    isSleeping = false,
+                    energy = (state.need.energy + 0.2f).coerceIn01(),
+                    calmness = (state.need.calmness + 0.18f).coerceIn01(),
+                    boredom = (state.need.boredom - 0.1f).coerceIn01(),
+                ),
+                emotion = state.emotion.copy(mood = PetMood.Happy, attention = PetAttention.Forward),
+            )
+            is PetAction.BreakSnoozed -> state.copy(
+                body = state.body.withTransient("look_right", action.nowMs, durationMs = 900L),
+                need = state.need.copy(
+                    lastInteractionAtMs = action.nowMs,
+                    isSleeping = false,
+                    calmness = (state.need.calmness + 0.05f).coerceIn01(),
+                ),
+                emotion = state.emotion.copy(mood = PetMood.Calm, attention = PetAttention.Right),
+            )
+            is PetAction.BreakDismissed -> state.copy(
+                body = state.body.clearTransient(),
+                need = state.need.copy(
+                    lastInteractionAtMs = action.nowMs,
+                    isSleeping = true,
+                    calmness = (state.need.calmness + 0.02f).coerceIn01(),
+                    helpfulness = (state.need.helpfulness - 0.04f).coerceIn01(),
+                ),
+                emotion = state.emotion.copy(mood = PetMood.Sleepy, attention = PetAttention.Forward),
+            )
+            is PetAction.ReminderProposalPrepared -> state.copy(
+                need = state.need.copy(lastReminderProposalAtMs = action.nowMs),
             )
         }
     }
@@ -81,13 +130,39 @@ object PetReducer {
         return next
     }
 
+    private fun onBrainTick(state: PetState, nowMs: Long): PetState {
+        val next = onTick(state, nowMs)
+        if (next.need.isSleeping || next.interaction.isDragging || next.overlay.isMinimized) {
+            return next
+        }
+        return next.copy(
+            need = next.need.copy(
+                boredom = (next.need.boredom + 0.01f).coerceIn01(),
+                curiosity = (next.need.curiosity + 0.005f).coerceIn01(),
+                energy = (next.need.energy - 0.004f).coerceIn01(),
+            ),
+        )
+    }
+
     private fun onTap(state: PetState, nowMs: Long): PetState {
         val attention = if ((nowMs / 1_000L) % 2L == 0L) PetAttention.Left else PetAttention.Right
-        val lookAnimation = if (attention == PetAttention.Left) "look_left" else "look_right"
+        val lookAnimation = if (state.need.isSleeping) {
+            "wake_up"
+        } else if (attention == PetAttention.Left) {
+            "look_left"
+        } else {
+            "look_right"
+        }
         return state.copy(
-            body = state.body.withTransient(lookAnimation, nowMs, durationMs = 650L),
+            body = state.body.withTransient(lookAnimation, nowMs, durationMs = if (lookAnimation == "wake_up") 900L else 650L),
             emotion = state.emotion.copy(mood = PetMood.Curious, attention = attention),
-            need = state.need.copy(lastInteractionAtMs = nowMs, isSleeping = false),
+            need = state.need.copy(
+                lastInteractionAtMs = nowMs,
+                isSleeping = false,
+                boredom = (state.need.boredom - 0.2f).coerceIn01(),
+                attention = (state.need.attention + 0.18f).coerceIn01(),
+                curiosity = (state.need.curiosity + 0.12f).coerceIn01(),
+            ),
             interaction = state.interaction.copy(isPressed = false, lastTapAtMs = nowMs),
         )
     }
@@ -146,28 +221,33 @@ object PetReducer {
         }
     }
 
-    private fun onCareReaction(state: PetState, animationKey: String, nowMs: Long): PetState {
+    private fun onAutonomousAnimationStarted(
+        state: PetState,
+        animationKey: String,
+        durationMs: Long,
+        nowMs: Long,
+    ): PetState {
         val mood = when (animationKey) {
-            "eat",
             "happy" -> PetMood.Happy
-            "drink" -> PetMood.Calm
             "confused" -> PetMood.Confused
             "sleep" -> PetMood.Sleepy
+            "sit",
+            "look_left",
+            "look_right",
+            "think",
+            -> PetMood.Calm
             else -> state.emotion.mood
-        }
-        val durationMs = when (animationKey) {
-            "eat" -> 1_800L
-            "drink" -> 1_500L
-            "happy" -> 1_300L
-            "confused" -> 1_200L
-            "sleep" -> 2_000L
-            else -> 1_200L
         }
 
         return state.copy(
             body = state.body.withTransient(animationKey, nowMs, durationMs),
             emotion = state.emotion.copy(mood = mood, attention = PetAttention.Forward),
-            need = state.need.copy(lastInteractionAtMs = nowMs, isSleeping = false),
+            need = state.need.copy(
+                lastAutonomousGestureAtMs = nowMs,
+                isSleeping = animationKey == "sleep",
+                boredom = (state.need.boredom - 0.05f).coerceIn01(),
+                calmness = (state.need.calmness + 0.03f).coerceIn01(),
+            ),
             agent = AgentState.Idle,
             interaction = state.interaction.copy(isPressed = false),
         )
@@ -183,4 +263,6 @@ object PetReducer {
     private fun BodyState.clearTransient(): BodyState {
         return copy(transientAnimation = null, transientExpiresAtMs = 0L)
     }
+
+    private fun Float.coerceIn01(): Float = coerceIn(0f, 1f)
 }

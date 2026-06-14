@@ -4,35 +4,56 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Choreographer
-import com.kazumaproject.petagent.agent.AgentEvent
-import com.kazumaproject.petagent.agent.StubAgentCore
-import com.kazumaproject.petagent.game.PetCareAction
-import com.kazumaproject.petagent.game.PetCareEngine
-import com.kazumaproject.petagent.game.PetCareRepository
-import com.kazumaproject.petagent.game.PetCareState
-import com.kazumaproject.petagent.game.PetCareUiState
-import com.kazumaproject.petagent.game.toUiState
+import com.kazumaproject.petagent.behavior.BehaviorReason
+import com.kazumaproject.petagent.behavior.PetBehaviorIds
+import com.kazumaproject.petagent.behavior.PetBehaviorSettingsRepository
+import com.kazumaproject.petagent.behavior.PetBrain
+import com.kazumaproject.petagent.behavior.PetContext
+import com.kazumaproject.petagent.behavior.PetDecision
+import com.kazumaproject.petagent.behavior.PetSpecies
+import com.kazumaproject.petagent.behavior.SpeciesBehaviorProfile
+import com.kazumaproject.petagent.breakreminder.BreakReminderEngine
+import com.kazumaproject.petagent.breakreminder.BreakReminderRepository
+import com.kazumaproject.petagent.breakreminder.BreakReminderSettingsRepository
+import com.kazumaproject.petagent.breakreminder.BreakReminderTone
+import com.kazumaproject.petagent.breakreminder.BreakStatus
+import com.kazumaproject.petagent.data.behavior.PetBehaviorRepository
+import com.kazumaproject.petagent.data.memory.PetMemoryRepository
+import com.kazumaproject.petagent.motion.MotionPlan
+import com.kazumaproject.petagent.motion.PetMotionController
+import com.kazumaproject.petagent.motion.PetMotionPlanner
 import com.kazumaproject.petagent.overlay.PetSpriteView
+import com.kazumaproject.petagent.petpack.PetPack
 import kotlin.math.min
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 class PetRuntime(
     private val petView: PetSpriteView,
-    private val agentCore: StubAgentCore,
-    private val petId: String,
-    private val species: String,
-    private val careRepository: PetCareRepository,
+    private val petPack: PetPack,
+    private val behaviorProfile: SpeciesBehaviorProfile,
+    private val petBrain: PetBrain,
+    private val motionPlanner: PetMotionPlanner,
+    private val breakReminderEngine: BreakReminderEngine,
+    private val breakReminderRepository: BreakReminderRepository,
+    private val breakReminderSettingsRepository: BreakReminderSettingsRepository,
+    private val petMemoryRepository: PetMemoryRepository,
+    private val petBehaviorRepository: PetBehaviorRepository,
+    private val petBehaviorSettingsRepository: PetBehaviorSettingsRepository,
+    private val petMotionController: PetMotionController,
+    private val coroutineScope: CoroutineScope,
     private val onStateChanged: (PetState) -> Unit = {},
-    private val onCareUiStateChanged: (PetCareUiState) -> Unit = {},
+    private val onUiRequest: (PetUiRequest) -> Unit = {},
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val choreographer = Choreographer.getInstance()
+    private val petId = petPack.manifest.petId
+    private val speciesName = petPack.manifest.species
     private var running = false
+    private var brainThinking = false
     private var lastStepAtMs = 0L
     private var currentRequestedAnimationKey: String? = null
-    private var pendingAgentStart: Runnable? = null
     private var state = PetState.initial(SystemClock.uptimeMillis())
-    private var careState: PetCareState? = null
-    private var lastCareTickWallClockMs: Long = 0L
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -42,39 +63,54 @@ class PetRuntime(
         }
     }
 
+    private val brainTickRunnable = object : Runnable {
+        override fun run() {
+            if (!running) return
+            runBrainTick()
+            handler.postDelayed(this, BRAIN_TICK_MS)
+        }
+    }
+
     fun start() {
         if (running) return
         running = true
-        initializeCareState()
+        val nowMs = System.currentTimeMillis()
+        coroutineScope.launch {
+            petMemoryRepository.ensureSeen(petId, speciesName, nowMs)
+        }
         renderImmediately()
         choreographer.postFrameCallback(frameCallback)
+        handler.postDelayed(brainTickRunnable, FIRST_BRAIN_TICK_DELAY_MS)
     }
 
     fun stop() {
         running = false
         choreographer.removeFrameCallback(frameCallback)
-        pendingAgentStart?.let { handler.removeCallbacks(it) }
-        pendingAgentStart = null
-        agentCore.unload()
+        handler.removeCallbacks(brainTickRunnable)
+        petMotionController.cancelAutonomousMotion()
     }
 
     fun onPetTapped() {
         val nowMs = SystemClock.uptimeMillis()
+        val nowWallClockMs = System.currentTimeMillis()
         dispatch(PetAction.Tap(nowMs))
-
-        pendingAgentStart?.let { handler.removeCallbacks(it) }
-        pendingAgentStart = Runnable {
-            agentCore.submit(prompt = "nearby things") { event ->
-                onAgentEvent(event)
-            }
-        }.also {
-            handler.postDelayed(it, TAP_LOOK_REACTION_MS)
+        coroutineScope.launch {
+            petMemoryRepository.incrementTap(petId, speciesName, nowWallClockMs)
+            petBehaviorRepository.record(
+                petId = petId,
+                species = speciesName,
+                occurredAtMs = nowWallClockMs,
+                behaviorId = PetBehaviorIds.USER_TAPPED,
+                reason = BehaviorReason.USER_TAPPED,
+                fromX = petMotionController.currentPose().x,
+                fromY = petMotionController.currentPose().y,
+            )
         }
+        onUiRequest(PetUiRequest.OpenBreakStatus)
     }
 
     fun onDragStarted() {
-        pendingAgentStart?.let { handler.removeCallbacks(it) }
-        agentCore.cancel()
+        petMotionController.cancelAutonomousMotion()
         dispatch(PetAction.DragStarted(SystemClock.uptimeMillis()))
     }
 
@@ -84,42 +120,83 @@ class PetRuntime(
 
     fun onMinimizedChanged(minimized: Boolean) {
         if (minimized) {
-            pendingAgentStart?.let { handler.removeCallbacks(it) }
-            agentCore.cancel()
+            petMotionController.cancelAutonomousMotion()
         }
         dispatch(PetAction.MinimizedChanged(minimized, SystemClock.uptimeMillis()))
     }
 
-    fun giveFood(foodId: String) {
-        reduceCareAction(
-            actionFactory = { nowWallClockMs -> PetCareAction.GiveFood(foodId, nowWallClockMs) },
-            sendReaction = true,
+    suspend fun currentBreakStatus(): BreakStatus {
+        return breakReminderRepository.breakStatus(
+            petId = petId,
+            settings = breakReminderSettingsRepository.load(),
+            nowMs = System.currentTimeMillis(),
         )
     }
 
-    fun giveWater() {
-        reduceCareAction(
-            actionFactory = { nowWallClockMs -> PetCareAction.GiveWater(nowWallClockMs) },
-            sendReaction = true,
+    fun showTestBreakReminder() {
+        val settings = breakReminderSettingsRepository.load()
+        dispatch(PetAction.BreakReminderShown(SystemClock.uptimeMillis()))
+        onUiRequest(
+            PetUiRequest.ShowBreakReminder(
+                message = "そろそろ休憩しませんか？",
+                activeMinutes = settings.intervalMinutes,
+                tone = settings.tone,
+            ),
         )
     }
 
-    fun play() {
-        reduceCareAction(
-            actionFactory = { nowWallClockMs -> PetCareAction.Play(nowWallClockMs) },
-            sendReaction = true,
-        )
+    fun acceptBreak() {
+        val nowUptimeMs = SystemClock.uptimeMillis()
+        val nowWallClockMs = System.currentTimeMillis()
+        val settings = breakReminderSettingsRepository.load()
+        coroutineScope.launch {
+            breakReminderRepository.acceptBreak(petId, settings, nowWallClockMs)
+            petMemoryRepository.incrementBreakAccepted(petId, speciesName, nowWallClockMs)
+            petBehaviorRepository.record(
+                petId = petId,
+                species = speciesName,
+                occurredAtMs = nowWallClockMs,
+                behaviorId = PetBehaviorIds.BREAK_ACCEPTED,
+                reason = BehaviorReason.BREAK_DUE,
+            )
+            dispatch(PetAction.BreakAccepted(nowUptimeMs))
+        }
     }
 
-    fun refreshCareState() {
-        reduceCareAction(
-            actionFactory = { nowWallClockMs -> PetCareAction.TimePassed(nowWallClockMs) },
-            sendReaction = false,
-        )
+    fun snoozeBreak() {
+        val nowUptimeMs = SystemClock.uptimeMillis()
+        val nowWallClockMs = System.currentTimeMillis()
+        val settings = breakReminderSettingsRepository.load()
+        coroutineScope.launch {
+            breakReminderRepository.snooze(petId, settings, nowWallClockMs)
+            petMemoryRepository.incrementSnooze(petId, speciesName, nowWallClockMs)
+            petBehaviorRepository.record(
+                petId = petId,
+                species = speciesName,
+                occurredAtMs = nowWallClockMs,
+                behaviorId = PetBehaviorIds.BREAK_SNOOZED,
+                reason = BehaviorReason.USER_DISMISSED,
+            )
+            dispatch(PetAction.BreakSnoozed(nowUptimeMs))
+        }
     }
 
-    private fun onAgentEvent(event: AgentEvent) {
-        dispatch(PetAction.AgentEventReceived(event, SystemClock.uptimeMillis()))
+    fun dismissBreakToday() {
+        val nowUptimeMs = SystemClock.uptimeMillis()
+        val nowWallClockMs = System.currentTimeMillis()
+        val settings = breakReminderSettingsRepository.load()
+        coroutineScope.launch {
+            breakReminderRepository.dismissToday(petId, settings, nowWallClockMs)
+            petMemoryRepository.incrementDismiss(petId, speciesName, nowWallClockMs)
+            petBehaviorRepository.record(
+                petId = petId,
+                species = speciesName,
+                occurredAtMs = nowWallClockMs,
+                behaviorId = PetBehaviorIds.BREAK_DISMISSED,
+                reason = BehaviorReason.USER_DISMISSED,
+            )
+            dispatch(PetAction.BreakDismissed(nowUptimeMs))
+        }
     }
 
     private fun step(frameTimeNanos: Long) {
@@ -139,51 +216,139 @@ class PetRuntime(
             applyAnimation(frameTimeNanos)
             petView.advance(frameTimeNanos)
         }
-        maybeRefreshCareState()
     }
 
-    private fun initializeCareState() {
+    private fun runBrainTick() {
+        if (brainThinking) return
+        val nowUptimeMs = SystemClock.uptimeMillis()
         val nowWallClockMs = System.currentTimeMillis()
-        val loadedState = careRepository.load(petId, nowWallClockMs)
-        val result = PetCareEngine.reduce(
-            state = loadedState,
-            action = PetCareAction.TimePassed(nowWallClockMs),
-            species = species,
+        reduceOnly(PetAction.BrainTick(nowUptimeMs))
+
+        val snapshot = state
+        val pose = petMotionController.currentPose()
+        val context = PetContext(
+            petId = petId,
+            speciesName = speciesName,
+            world = petMotionController.currentWorld(behaviorProfile.species),
+            breakReminderSettings = breakReminderSettingsRepository.load(),
+            behaviorSettings = petBehaviorSettingsRepository.load(),
+            overlayVisible = snapshot.overlay.isVisible,
+            isMinimized = snapshot.overlay.isMinimized || petMotionController.isMinimized(),
+            isDragging = snapshot.interaction.isDragging || petMotionController.isDragging(),
+            hasTransientAnimation = snapshot.body.transientAnimation != null,
+            nowWallClockMs = nowWallClockMs,
         )
-        careRepository.save(result.state)
-        careState = result.state
-        lastCareTickWallClockMs = nowWallClockMs
-        onCareUiStateChanged(result.state.toUiState())
+
+        brainThinking = true
+        coroutineScope.launch {
+            val decision = runCatching {
+                petBrain.think(snapshot, context, pose, nowUptimeMs)
+            }.getOrElse {
+                PetDecision.None
+            }
+            brainThinking = false
+            if (running) {
+                handleDecision(decision)
+            }
+        }
     }
 
-    private fun maybeRefreshCareState() {
-        val nowWallClockMs = System.currentTimeMillis()
-        if (lastCareTickWallClockMs != 0L && nowWallClockMs - lastCareTickWallClockMs < CARE_TICK_MS) {
+    private fun handleDecision(decision: PetDecision) {
+        if (state.interaction.isDragging || state.overlay.isMinimized || petMotionController.isDragging() || petMotionController.isMinimized()) {
             return
         }
-        refreshCareState()
+        val nowUptimeMs = SystemClock.uptimeMillis()
+        val nowWallClockMs = System.currentTimeMillis()
+        when (decision) {
+            PetDecision.None -> Unit
+            is PetDecision.PlayAnimation -> {
+                dispatch(
+                    PetAction.AutonomousAnimationStarted(
+                        animationKey = decision.animationKey,
+                        durationMs = decision.durationMs,
+                        nowMs = nowUptimeMs,
+                    ),
+                )
+                coroutineScope.launch {
+                    petBehaviorRepository.record(
+                        petId = petId,
+                        species = speciesName,
+                        occurredAtMs = nowWallClockMs,
+                        behaviorId = decision.behaviorId,
+                        reason = decision.reason,
+                        fromX = petMotionController.currentPose().x,
+                        fromY = petMotionController.currentPose().y,
+                    )
+                }
+            }
+            is PetDecision.MoveTo -> startMotion(decision.plan, recordBehavior = true)
+            is PetDecision.PrepareBreakReminder -> {
+                dispatch(PetAction.ReminderProposalPrepared(nowUptimeMs))
+                decision.animationKey?.let { animationKey ->
+                    dispatch(
+                        PetAction.AutonomousAnimationStarted(
+                            animationKey = animationKey,
+                            durationMs = 1_200L,
+                            nowMs = nowUptimeMs,
+                        ),
+                    )
+                }
+                decision.plan?.let { startMotion(it, recordBehavior = false) }
+            }
+            is PetDecision.ShowBreakReminder -> {
+                dispatch(PetAction.BreakReminderShown(nowUptimeMs))
+                onUiRequest(
+                    PetUiRequest.ShowBreakReminder(
+                        message = decision.message,
+                        activeMinutes = decision.activeMinutes,
+                        tone = decision.tone,
+                    ),
+                )
+            }
+            PetDecision.ShowBreakStatusPanel -> onUiRequest(PetUiRequest.OpenBreakStatus)
+        }
     }
 
-    private fun reduceCareAction(
-        actionFactory: (Long) -> PetCareAction,
-        sendReaction: Boolean,
-    ) {
-        val nowWallClockMs = System.currentTimeMillis()
+    private fun startMotion(plan: MotionPlan, recordBehavior: Boolean) {
         val nowUptimeMs = SystemClock.uptimeMillis()
-        val currentState = careState ?: careRepository.load(petId, nowWallClockMs)
-        val result = PetCareEngine.reduce(
-            state = currentState,
-            action = actionFactory(nowWallClockMs),
-            species = species,
+        val nowWallClockMs = System.currentTimeMillis()
+        dispatch(
+            PetAction.AutonomousAnimationStarted(
+                animationKey = plan.animationKey,
+                durationMs = plan.durationMs + 250L,
+                nowMs = nowUptimeMs,
+            ),
         )
-        careRepository.save(result.state)
-        careState = result.state
-        lastCareTickWallClockMs = nowWallClockMs
-
-        if (sendReaction) {
-            dispatch(PetAction.CareReactionReceived(result.reaction.animationKey, nowUptimeMs))
+        dispatch(PetAction.AutonomousMoveStarted(nowUptimeMs))
+        if (recordBehavior) {
+            coroutineScope.launch {
+                petBehaviorRepository.record(
+                    petId = petId,
+                    species = speciesName,
+                    occurredAtMs = nowWallClockMs,
+                    behaviorId = behaviorIdFor(plan),
+                    locomotionMode = plan.locomotionMode,
+                    reason = plan.reason,
+                    fromX = plan.fromX,
+                    fromY = plan.fromY,
+                    toX = plan.targetX,
+                    toY = plan.targetY,
+                )
+            }
         }
-        onCareUiStateChanged(result.state.toUiState())
+        petMotionController.animateTo(plan) {
+            if (running) {
+                dispatch(PetAction.AutonomousMoveFinished(SystemClock.uptimeMillis()))
+            }
+        }
+    }
+
+    private fun behaviorIdFor(plan: MotionPlan): String {
+        return when (behaviorProfile.species) {
+            PetSpecies.PANDA -> PetBehaviorIds.PANDA_SLOW_WALK
+            PetSpecies.AFRICAN_SCOPS_OWL -> PetBehaviorIds.OWL_PERCH_SHIFT
+            PetSpecies.UNKNOWN -> PetBehaviorIds.AUTO_SLEEP
+        }
     }
 
     private fun dispatch(action: PetAction) {
@@ -193,10 +358,39 @@ class PetRuntime(
     }
 
     private fun reduceOnly(action: PetAction) {
+        val wasSleeping = state.need.isSleeping
         val nextState = PetReducer.reduce(state, action)
         if (nextState != state) {
             state = nextState
             onStateChanged(state)
+            recordSleepTransitionIfNeeded(wasSleeping, nextState.need.isSleeping, action)
+        }
+    }
+
+    private fun recordSleepTransitionIfNeeded(
+        wasSleeping: Boolean,
+        isSleeping: Boolean,
+        action: PetAction,
+    ) {
+        if (wasSleeping == isSleeping) return
+        val nowWallClockMs = System.currentTimeMillis()
+        val behaviorId = if (isSleeping) PetBehaviorIds.AUTO_SLEEP else PetBehaviorIds.AUTO_WAKE
+        val reason = when {
+            isSleeping -> BehaviorReason.SLEEP
+            action is PetAction.Tap -> BehaviorReason.USER_TAPPED
+            else -> BehaviorReason.IDLE
+        }
+        val pose = petMotionController.currentPose()
+        coroutineScope.launch {
+            petBehaviorRepository.record(
+                petId = petId,
+                species = speciesName,
+                occurredAtMs = nowWallClockMs,
+                behaviorId = behaviorId,
+                reason = reason,
+                fromX = pose.x,
+                fromY = pose.y,
+            )
         }
     }
 
@@ -227,7 +421,17 @@ class PetRuntime(
     }
 
     private companion object {
-        const val TAP_LOOK_REACTION_MS = 430L
-        const val CARE_TICK_MS = 30_000L
+        const val FIRST_BRAIN_TICK_DELAY_MS = 1_000L
+        const val BRAIN_TICK_MS = 15_000L
     }
+}
+
+sealed interface PetUiRequest {
+    data object OpenBreakStatus : PetUiRequest
+
+    data class ShowBreakReminder(
+        val message: String,
+        val activeMinutes: Int,
+        val tone: BreakReminderTone,
+    ) : PetUiRequest
 }

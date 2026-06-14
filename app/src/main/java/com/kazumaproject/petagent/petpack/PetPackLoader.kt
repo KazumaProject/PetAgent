@@ -75,7 +75,54 @@ class PetPackLoader(
                 width = hitbox?.optDouble("width", 1.0)?.toFloat() ?: 1f,
                 height = hitbox?.optDouble("height", 1.0)?.toFloat() ?: 1f,
             ),
+            behaviorProfile = parseBehaviorProfile(json.optJSONObject("behaviorProfile")),
         )
+    }
+
+    private fun parseBehaviorProfile(json: JSONObject?): PetManifestBehaviorProfile? {
+        if (json == null) return null
+        val autonomousBehaviors = mutableListOf<PetManifestAutonomousBehavior>()
+        val behaviorsJson = json.optJSONArray("autonomousBehaviors")
+        if (behaviorsJson != null) {
+            for (index in 0 until behaviorsJson.length()) {
+                val behaviorJson = behaviorsJson.optJSONObject(index) ?: continue
+                autonomousBehaviors += PetManifestAutonomousBehavior(
+                    id = behaviorJson.optString("id"),
+                    animation = behaviorJson.optString("animation").takeIf { it.isNotBlank() },
+                    animationLeft = behaviorJson.optString("animationLeft").takeIf { it.isNotBlank() },
+                    animationRight = behaviorJson.optString("animationRight").takeIf { it.isNotBlank() },
+                    minIntervalMs = behaviorJson.optLong("minIntervalMs").takeIf { it > 0L },
+                    maxDistanceScreenRatio = behaviorJson.optDouble("maxDistanceScreenRatio")
+                        .takeIf { it > 0.0 }
+                        ?.toFloat(),
+                )
+            }
+        }
+
+        val breakPreparationJson = json.optJSONObject("breakPreparation")
+        return PetManifestBehaviorProfile(
+            species = json.optString("species"),
+            movementPlane = json.optString("movementPlane"),
+            defaultLocomotion = json.optString("defaultLocomotion"),
+            idleBehaviors = parseStringList(json.optJSONArray("idleBehaviors")),
+            autonomousBehaviors = autonomousBehaviors.filter { it.id.isNotBlank() },
+            breakPreparation = breakPreparationJson?.let {
+                PetManifestBreakPreparation(
+                    approachMode = it.optString("approachMode"),
+                    leadTimeMinutes = it.optInt("leadTimeMinutes", 2).coerceIn(1, 30),
+                )
+            },
+        )
+    }
+
+    private fun parseStringList(array: org.json.JSONArray?): List<String> {
+        if (array == null) return emptyList()
+        val values = mutableListOf<String>()
+        for (index in 0 until array.length()) {
+            val value = array.optString(index)
+            if (value.isNotBlank()) values += value
+        }
+        return values
     }
 
     private fun parseAnimation(key: String, json: JSONObject): SpriteAnimation? {

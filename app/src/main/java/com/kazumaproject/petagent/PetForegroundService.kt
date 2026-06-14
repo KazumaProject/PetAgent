@@ -16,25 +16,38 @@ import android.util.Log
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import com.kazumaproject.petagent.agent.StubAgentCore
-import com.kazumaproject.petagent.game.FoodCatalog
-import com.kazumaproject.petagent.game.PetCareRepository
-import com.kazumaproject.petagent.game.PetCareUiState
-import com.kazumaproject.petagent.game.PrimaryNeed
-import com.kazumaproject.petagent.overlay.PetCareOverlayController
+import com.kazumaproject.petagent.behavior.PetBehaviorSettingsRepository
+import com.kazumaproject.petagent.behavior.PetBrain
+import com.kazumaproject.petagent.behavior.SpeciesBehaviorProfile
+import com.kazumaproject.petagent.breakreminder.BreakReminderEngine
+import com.kazumaproject.petagent.breakreminder.BreakReminderRepository
+import com.kazumaproject.petagent.breakreminder.BreakReminderSettingsRepository
+import com.kazumaproject.petagent.data.PetAgentDatabase
+import com.kazumaproject.petagent.data.behavior.PetBehaviorRepository
+import com.kazumaproject.petagent.data.memory.PetMemoryRepository
+import com.kazumaproject.petagent.motion.PetMotionController
+import com.kazumaproject.petagent.motion.PetMotionPlanner
+import com.kazumaproject.petagent.overlay.PetBreakReminderBubbleController
+import com.kazumaproject.petagent.overlay.PetBreakStatusPanelController
 import com.kazumaproject.petagent.overlay.PetOverlayController
 import com.kazumaproject.petagent.petpack.PetCatalogLoader
 import com.kazumaproject.petagent.petpack.PetPack
 import com.kazumaproject.petagent.petpack.PetPackLoader
 import com.kazumaproject.petagent.runtime.PetRuntime
+import com.kazumaproject.petagent.runtime.PetUiRequest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class PetForegroundService : Service(), PetOverlayController.Listener {
     private var overlayController: PetOverlayController? = null
-    private var careOverlayController: PetCareOverlayController? = null
+    private var breakReminderBubbleController: PetBreakReminderBubbleController? = null
+    private var breakStatusPanelController: PetBreakStatusPanelController? = null
     private var runtime: PetRuntime? = null
-    private var agentCore: StubAgentCore? = null
+    private var serviceScope: CoroutineScope? = null
     private var currentPetPack: PetPack? = null
-    private var latestCareUiState: PetCareUiState? = null
     private var latestPetBounds: Rect? = null
     private var isMinimized = false
 
@@ -57,6 +70,10 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
             ACTION_UPDATE_SETTINGS -> {
                 return if (updatePetSettings(startId)) START_STICKY else START_NOT_STICKY
             }
+            ACTION_TEST_REMINDER -> {
+                runtime?.showTestBreakReminder() ?: stopSelf(startId)
+                return if (runtime != null) START_STICKY else START_NOT_STICKY
+            }
             ACTION_START -> startPet()
         }
         return START_STICKY
@@ -72,40 +89,30 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
     override fun onPetTapped(petBounds: Rect) {
         latestPetBounds = petBounds
         runtime?.onPetTapped()
-        careOverlayController?.showCareMenuNearPet(petBounds)
     }
 
     override fun onDragStarted(petBounds: Rect) {
         latestPetBounds = petBounds
-        careOverlayController?.hideCareMenu()
+        breakReminderBubbleController?.removeAll()
+        breakStatusPanelController?.removeAll()
         runtime?.onDragStarted()
     }
 
     override fun onPetMoved(petBounds: Rect) {
         latestPetBounds = petBounds
-        latestCareUiState?.let { careUiState ->
-            careOverlayController?.updateNeedBubble(petBounds, careUiState)
-        }
     }
 
     override fun onDragEnded(petBounds: Rect) {
         latestPetBounds = petBounds
         runtime?.onDragEnded()
-        latestCareUiState?.let { careUiState ->
-            careOverlayController?.updateNeedBubble(petBounds, careUiState)
-        }
     }
 
     override fun onMinimizedChanged(minimized: Boolean, petBounds: Rect) {
         isMinimized = minimized
         latestPetBounds = petBounds
-        careOverlayController?.hideCareMenu()
         if (minimized) {
-            careOverlayController?.hideNeedBubble()
-        } else {
-            latestCareUiState?.let { careUiState ->
-                careOverlayController?.updateNeedBubble(petBounds, careUiState)
-            }
+            breakReminderBubbleController?.removeAll()
+            breakStatusPanelController?.removeAll()
         }
         runtime?.onMinimizedChanged(minimized)
         updateNotification()
@@ -126,26 +133,64 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
             val overlay = PetOverlayController(this, settings.petPack, this, settings.sizeDp)
             overlay.show()
             val view = overlay.view ?: error("Overlay view was not created.")
-            val agent = StubAgentCore()
-            val careOverlay = createCareOverlayController()
+            val windowManager = getSystemService(WindowManager::class.java)
+            val database = PetAgentDatabase.getInstance(this)
+            val breakReminderRepository = BreakReminderRepository(database.breakReminderDao())
+            val petMemoryRepository = PetMemoryRepository(database.petMemoryDao())
+            val petBehaviorRepository = PetBehaviorRepository(database.petBehaviorDao())
+            val breakReminderSettingsRepository = BreakReminderSettingsRepository(this)
+            val petBehaviorSettingsRepository = PetBehaviorSettingsRepository(this)
+            val profile = SpeciesBehaviorProfile.fromManifest(
+                manifest = settings.petPack.manifest,
+                availableAnimationKeys = settings.petPack.animations.keys,
+            )
+            val motionPlanner = PetMotionPlanner(settings.petPack)
+            val breakReminderEngine = BreakReminderEngine(breakReminderRepository)
+            val brain = PetBrain(
+                behaviorProfile = profile,
+                motionPlanner = motionPlanner,
+                breakReminderEngine = breakReminderEngine,
+                breakReminderRepository = breakReminderRepository,
+                petMemoryRepository = petMemoryRepository,
+                petBehaviorRepository = petBehaviorRepository,
+            )
+            val motionController = PetMotionController(overlay)
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+            val bubbleController = PetBreakReminderBubbleController(
+                context = this,
+                windowManager = windowManager,
+                onAcceptClicked = { runtime?.acceptBreak() },
+                onSnoozeClicked = { runtime?.snoozeBreak() },
+                onDismissTodayClicked = { runtime?.dismissBreakToday() },
+            )
+            val statusPanelController = PetBreakStatusPanelController(
+                context = this,
+                windowManager = windowManager,
+                onBreakNowClicked = { runtime?.acceptBreak() },
+                onSnoozeClicked = { runtime?.snoozeBreak() },
+                onSettingsClicked = { openSettingsActivity() },
+            )
             val petRuntime = PetRuntime(
                 petView = view,
-                agentCore = agent,
-                petId = settings.petPack.manifest.petId,
-                species = settings.petPack.manifest.species,
-                careRepository = PetCareRepository(this),
-                onCareUiStateChanged = { uiState ->
-                    latestCareUiState = uiState
-                    val bounds = latestPetBounds
-                    if (!isMinimized && bounds != null) {
-                        careOverlayController?.updateNeedBubble(bounds, uiState)
-                    }
-                },
+                petPack = settings.petPack,
+                behaviorProfile = profile,
+                petBrain = brain,
+                motionPlanner = motionPlanner,
+                breakReminderEngine = breakReminderEngine,
+                breakReminderRepository = breakReminderRepository,
+                breakReminderSettingsRepository = breakReminderSettingsRepository,
+                petMemoryRepository = petMemoryRepository,
+                petBehaviorRepository = petBehaviorRepository,
+                petBehaviorSettingsRepository = petBehaviorSettingsRepository,
+                petMotionController = motionController,
+                coroutineScope = scope,
+                onUiRequest = { request -> handleUiRequest(request) },
             )
 
             overlayController = overlay
-            careOverlayController = careOverlay
-            agentCore = agent
+            breakReminderBubbleController = bubbleController
+            breakStatusPanelController = statusPanelController
+            serviceScope = scope
             currentPetPack = settings.petPack
             latestPetBounds = overlay.currentPetBounds()
             runtime = petRuntime
@@ -154,6 +199,40 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
             Log.e(TAG, "Unable to start pet overlay.", error)
             stopPetAndService()
         }
+    }
+
+    private fun handleUiRequest(request: PetUiRequest) {
+        when (request) {
+            PetUiRequest.OpenBreakStatus -> showBreakStatusPanel()
+            is PetUiRequest.ShowBreakReminder -> {
+                if (isMinimized) return
+                val bounds = latestPetBounds ?: overlayController?.currentPetBounds() ?: return
+                breakStatusPanelController?.removeAll()
+                breakReminderBubbleController?.showNearPet(
+                    petBounds = bounds,
+                    message = request.message,
+                    activeMinutes = request.activeMinutes,
+                    tone = request.tone,
+                )
+            }
+        }
+    }
+
+    private fun showBreakStatusPanel() {
+        if (isMinimized) return
+        val petRuntime = runtime ?: return
+        val bounds = latestPetBounds ?: overlayController?.currentPetBounds() ?: return
+        serviceScope?.launch {
+            val status = petRuntime.currentBreakStatus()
+            breakReminderBubbleController?.removeAll()
+            breakStatusPanelController?.showNearPet(bounds, status)
+        }
+    }
+
+    private fun openSettingsActivity() {
+        val intent = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
     }
 
     private fun updatePetSettings(startId: Int): Boolean {
@@ -177,6 +256,7 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
             } else {
                 currentPetPack = selectedSettings.petPack
                 overlay.updateSize(selectedSettings.sizeDp)
+                latestPetBounds = overlay.currentPetBounds()
                 updateNotification()
             }
         } catch (error: Throwable) {
@@ -197,84 +277,19 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
     }
 
     private fun clearPetRuntime() {
-        careOverlayController?.removeAll()
-        careOverlayController = null
         runtime?.stop()
         runtime = null
-        agentCore?.unload()
-        agentCore = null
         overlayController?.remove()
         overlayController = null
+        breakReminderBubbleController?.removeAll()
+        breakReminderBubbleController = null
+        breakStatusPanelController?.removeAll()
+        breakStatusPanelController = null
+        serviceScope?.cancel()
+        serviceScope = null
         currentPetPack = null
-        latestCareUiState = null
         latestPetBounds = null
         isMinimized = false
-    }
-
-    private fun createCareOverlayController(): PetCareOverlayController {
-        return PetCareOverlayController(
-            context = this,
-            windowManager = getSystemService(WindowManager::class.java),
-            onFoodClicked = {
-                val petPack = currentPetPack
-                if (petPack != null) {
-                    val food = FoodCatalog.recommendedForSpecies(petPack.manifest.species)
-                    latestPetBounds?.let { bounds ->
-                        careOverlayController?.playItemFlyAnimation(bounds, food.iconText)
-                    }
-                    runtime?.giveFood(food.id)
-                }
-                careOverlayController?.hideCareMenu()
-            },
-            onWaterClicked = {
-                latestPetBounds?.let { bounds ->
-                    careOverlayController?.playItemFlyAnimation(bounds, "💧")
-                }
-                runtime?.giveWater()
-                careOverlayController?.hideCareMenu()
-            },
-            onPlayClicked = {
-                latestPetBounds?.let { bounds ->
-                    careOverlayController?.playItemFlyAnimation(bounds, "🎾")
-                }
-                runtime?.play()
-                careOverlayController?.hideCareMenu()
-            },
-            onNeedClicked = { need ->
-                handleNeedClicked(need)
-            },
-        )
-    }
-
-    private fun handleNeedClicked(need: PrimaryNeed) {
-        when (need) {
-            PrimaryNeed.Water -> {
-                latestPetBounds?.let { bounds ->
-                    careOverlayController?.playItemFlyAnimation(bounds, "💧")
-                }
-                runtime?.giveWater()
-            }
-            PrimaryNeed.Food -> {
-                val petPack = currentPetPack
-                if (petPack != null) {
-                    val food = FoodCatalog.recommendedForSpecies(petPack.manifest.species)
-                    latestPetBounds?.let { bounds ->
-                        careOverlayController?.playItemFlyAnimation(bounds, food.iconText)
-                    }
-                    runtime?.giveFood(food.id)
-                }
-            }
-            PrimaryNeed.Play -> {
-                latestPetBounds?.let { bounds ->
-                    careOverlayController?.playItemFlyAnimation(bounds, "🎾")
-                }
-                runtime?.play()
-            }
-            PrimaryNeed.Sleep -> {
-                // MVP: sleep need is informational; tapping it does not change care state yet.
-            }
-        }
-        careOverlayController?.hideCareMenu()
     }
 
     private fun promoteToForeground() {
@@ -315,7 +330,7 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("Floating pet is awake")
-            .setContentText("Drag, tap, or long-press your pet companion.")
+            .setContentText("Your pet can move around and suggest healthy breaks.")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -380,6 +395,7 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
         private const val ACTION_STOP = "com.kazumaproject.petagent.action.STOP"
         private const val ACTION_TOGGLE_PEEK = "com.kazumaproject.petagent.action.TOGGLE_PEEK"
         private const val ACTION_UPDATE_SETTINGS = "com.kazumaproject.petagent.action.UPDATE_SETTINGS"
+        private const val ACTION_TEST_REMINDER = "com.kazumaproject.petagent.action.TEST_REMINDER"
 
         fun start(context: Context) {
             val intent = Intent(context, PetForegroundService::class.java).setAction(ACTION_START)
@@ -394,6 +410,12 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
         fun updateSettings(context: Context) {
             val intent = Intent(context, PetForegroundService::class.java)
                 .setAction(ACTION_UPDATE_SETTINGS)
+            context.startService(intent)
+        }
+
+        fun showTestReminder(context: Context) {
+            val intent = Intent(context, PetForegroundService::class.java)
+                .setAction(ACTION_TEST_REMINDER)
             context.startService(intent)
         }
     }
