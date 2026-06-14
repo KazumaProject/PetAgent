@@ -148,6 +148,114 @@
       "frameCount": 8,
       "fps": 10,
       "loop": false
+    },
+    "perch_idle_loop": {
+      "type": "spritesheet",
+      "file": "sprites/perch_idle_loop.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 16,
+      "fps": 12,
+      "loop": true
+    },
+    "head_tilt_left": {
+      "type": "spritesheet",
+      "file": "sprites/head_tilt_left.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 12,
+      "loop": false
+    },
+    "head_tilt_right": {
+      "type": "spritesheet",
+      "file": "sprites/head_tilt_right.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 12,
+      "loop": false
+    },
+    "preen": {
+      "type": "spritesheet",
+      "file": "sprites/preen.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 10,
+      "fps": 10,
+      "loop": false
+    },
+    "feather_puff": {
+      "type": "spritesheet",
+      "file": "sprites/feather_puff.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 10,
+      "fps": 12,
+      "loop": false
+    },
+    "takeoff_left": {
+      "type": "spritesheet",
+      "file": "sprites/takeoff_left.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 14,
+      "loop": false
+    },
+    "takeoff_right": {
+      "type": "spritesheet",
+      "file": "sprites/takeoff_right.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 14,
+      "loop": false
+    },
+    "glide_left": {
+      "type": "spritesheet",
+      "file": "sprites/glide_left.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 12,
+      "fps": 14,
+      "loop": true
+    },
+    "glide_right": {
+      "type": "spritesheet",
+      "file": "sprites/glide_right.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 12,
+      "fps": 14,
+      "loop": true
+    },
+    "landing_left": {
+      "type": "spritesheet",
+      "file": "sprites/landing_left.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 12,
+      "loop": false
+    },
+    "landing_right": {
+      "type": "spritesheet",
+      "file": "sprites/landing_right.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 12,
+      "loop": false
+    },
+    "settle": {
+      "type": "spritesheet",
+      "file": "sprites/settle.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 12,
+      "loop": false
     }
   },
   "fallbacks": {
@@ -165,6 +273,18 @@
     "hop_left": "land",
     "hop_right": "land",
     "short_flight": "fly_right",
-    "hop": "hop_right"
+    "hop": "hop_right",
+    "perch_idle_loop": "idle",
+    "head_tilt_left": "look_left",
+    "head_tilt_right": "look_right",
+    "preen": "think",
+    "feather_puff": "idle",
+    "takeoff_left": "fly_left",
+    "takeoff_right": "fly_right",
+    "glide_left": "fly_left",
+    "glide_right": "fly_right",
+    "landing_left": "land",
+    "landing_right": "land",
+    "settle": "idle"
   }
 }

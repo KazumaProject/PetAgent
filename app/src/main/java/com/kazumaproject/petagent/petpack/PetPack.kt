@@ -9,18 +9,36 @@ data class PetPack(
     val animations: Map<String, SpriteAnimation>,
     val fallbacks: Map<String, String>,
 ) {
+    fun hasAnimation(key: String): Boolean {
+        return animations.containsKey(key)
+    }
+
+    fun resolveAnimationKeyOrFallback(key: String, fallback: String = IDLE_ANIMATION): String {
+        animations[key]?.let { return key }
+
+        fallbacks[key]?.let { fallbackKey ->
+            if (animations.containsKey(fallbackKey)) return fallbackKey
+        }
+
+        if (animations.containsKey(fallback)) return fallback
+
+        animations.keys.firstOrNull()?.let { return it }
+
+        return fallback
+    }
+
     fun resolveAnimation(requestedKey: String): SpriteAnimation? {
         animations[requestedKey]?.let { return it }
 
-        val candidateKeys = listOfNotNull(
-            fallbacks[requestedKey],
-            builtInFallback(requestedKey),
-            IDLE_ANIMATION,
-        ).distinct()
-
-        candidateKeys.forEach { key ->
-            animations[key]?.let { return it }
+        fallbacks[requestedKey]?.let { fallbackKey ->
+            animations[fallbackKey]?.let { return it }
         }
+
+        builtInFallback(requestedKey)?.let { fallbackKey ->
+            animations[fallbackKey]?.let { return it }
+        }
+
+        animations[IDLE_ANIMATION]?.let { return it }
 
         animations.values.firstOrNull()?.let { return it }
 

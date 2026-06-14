@@ -36,9 +36,13 @@ class PetSpriteView @JvmOverloads constructor(
         contentDescription = petPack.manifest.displayName
     }
 
-    fun setAnimation(animationKey: String, frameTimeNanos: Long) {
+    fun setAnimation(
+        animationKey: String,
+        frameTimeNanos: Long,
+        restart: Boolean = false,
+    ) {
         val resolvedAnimation = petPack.resolveAnimation(animationKey)
-        if (resolvedAnimation?.key == currentAnimation?.key) return
+        if (!restart && resolvedAnimation?.key == currentAnimation?.key) return
 
         currentAnimation = resolvedAnimation
         currentFrameIndex = 0

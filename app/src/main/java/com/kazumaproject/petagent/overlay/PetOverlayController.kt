@@ -5,7 +5,6 @@ import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.app.Service
 import android.graphics.PixelFormat
-import android.graphics.Point
 import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
@@ -18,10 +17,15 @@ import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.animation.LinearInterpolator
 import com.kazumaproject.petagent.behavior.PetSpecies
 import com.kazumaproject.petagent.motion.Facing
+import com.kazumaproject.petagent.motion.FloorZone
 import com.kazumaproject.petagent.motion.MotionCurve
 import com.kazumaproject.petagent.motion.MotionPlan
+import com.kazumaproject.petagent.motion.MotionSequence
+import com.kazumaproject.petagent.motion.PetMotionSequencePlayer
 import com.kazumaproject.petagent.motion.PetPose
 import com.kazumaproject.petagent.motion.PetWorld
+import com.kazumaproject.petagent.motion.PoseFx
+import com.kazumaproject.petagent.motion.WorldPoint
 import com.kazumaproject.petagent.petpack.PetPack
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -48,6 +52,7 @@ class PetOverlayController(
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
+    private val sequencePlayer = PetMotionSequencePlayer(handler)
     private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
     private var sizeDp = initialSizeDp.coerceIn(petPack.manifest.minSizeDp, petPack.manifest.maxSizeDp)
     private var sizePx = dp(sizeDp)
@@ -96,6 +101,7 @@ class PetOverlayController(
     fun remove() {
         autonomousAnimator?.cancel()
         autonomousAnimator = null
+        sequencePlayer.cancel()
         handler.removeCallbacksAndMessages(null)
         val view = petView ?: return
         try {
@@ -157,29 +163,34 @@ class PetOverlayController(
             width = params?.width ?: sizePx,
             height = params?.height ?: sizePx,
             facing = facing,
-            isMoving = autonomousAnimator?.isRunning == true,
+            isMoving = autonomousAnimator?.isRunning == true || sequencePlayer.isRunning(),
         )
     }
 
     fun currentWorld(species: PetSpecies): PetWorld {
         val metrics = service.resources.displayMetrics
         val floorTop = (metrics.heightPixels * 0.65f).roundToInt()
-        val floorBottom = (metrics.heightPixels - sizePx).coerceAtLeast(floorTop)
+        val floorBottom = (metrics.heightPixels - sizePx - dp(24)).coerceAtLeast(floorTop)
+        val floorZone = FloorZone(
+            top = floorTop.coerceIn(0, (metrics.heightPixels - sizePx).coerceAtLeast(0)),
+            bottom = floorBottom.coerceIn(0, (metrics.heightPixels - sizePx).coerceAtLeast(0)),
+            preferredY = floorBottom.coerceIn(0, (metrics.heightPixels - sizePx).coerceAtLeast(0)),
+        )
         val perchPoints = when (species) {
             PetSpecies.AFRICAN_SCOPS_OWL -> listOf(
-                Point(dp(18), dp(92)),
-                Point(metrics.widthPixels - sizePx - dp(18), dp(96)),
-                Point(dp(20), (metrics.heightPixels * 0.42f).roundToInt()),
-                Point(metrics.widthPixels - sizePx - dp(22), (metrics.heightPixels * 0.48f).roundToInt()),
-                Point((metrics.widthPixels - sizePx) / 2, dp(148)),
+                WorldPoint(dp(18), dp(92)),
+                WorldPoint(metrics.widthPixels - sizePx - dp(18), dp(96)),
+                WorldPoint(dp(20), (metrics.heightPixels * 0.42f).roundToInt()),
+                WorldPoint(metrics.widthPixels - sizePx - dp(22), (metrics.heightPixels * 0.48f).roundToInt()),
+                WorldPoint((metrics.widthPixels - sizePx) / 2, dp(148)),
             )
             else -> listOf(
-                Point(dp(24), floorTop),
-                Point(metrics.widthPixels - sizePx - dp(24), floorTop),
-                Point((metrics.widthPixels - sizePx) / 2, floorBottom),
+                WorldPoint(dp(24), floorZone.top),
+                WorldPoint(metrics.widthPixels - sizePx - dp(24), floorZone.top),
+                WorldPoint((metrics.widthPixels - sizePx) / 2, floorZone.bottom),
             )
         }.map { point ->
-            Point(
+            WorldPoint(
                 point.x.coerceIn(0, (metrics.widthPixels - sizePx).coerceAtLeast(0)),
                 point.y.coerceIn(0, (metrics.heightPixels - sizePx).coerceAtLeast(0)),
             )
@@ -188,8 +199,7 @@ class PetOverlayController(
             screenWidth = metrics.widthPixels,
             screenHeight = metrics.heightPixels,
             petSizePx = sizePx,
-            floorBandTop = floorTop,
-            floorBandBottom = floorBottom,
+            floorZone = floorZone,
             perchPoints = perchPoints,
         )
     }
@@ -280,6 +290,72 @@ class PetOverlayController(
         }
     }
 
+    fun playSequence(
+        sequence: MotionSequence,
+        currentPose: PetPose,
+        world: PetWorld,
+        onAnimation: (key: String, restart: Boolean) -> Unit,
+        onFinished: () -> Unit,
+    ) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            handler.post {
+                playSequence(
+                    sequence = sequence,
+                    currentPose = currentPose,
+                    world = world,
+                    onAnimation = onAnimation,
+                    onFinished = onFinished,
+                )
+            }
+            return
+        }
+        if (isMinimized || dragging) {
+            onFinished()
+            return
+        }
+        val params = layoutParams ?: run {
+            onFinished()
+            return
+        }
+        val view = petView ?: run {
+            onFinished()
+            return
+        }
+
+        cancelAutonomousMotion()
+        var lastX = params.x
+        sequencePlayer.playSequence(
+            sequence = sequence,
+            currentPose = currentPose,
+            world = world,
+            onAnimation = onAnimation,
+            onMoveFrame = { x, y, poseFx, progress ->
+                val maxX = (world.screenWidth - params.width).coerceAtLeast(0)
+                val maxY = (world.screenHeight - params.height).coerceAtLeast(0)
+                val nextX = x.coerceIn(0, maxX)
+                val nextY = y.coerceIn(0, maxY)
+                facing = when {
+                    nextX < lastX -> Facing.LEFT
+                    nextX > lastX -> Facing.RIGHT
+                    else -> facing
+                }
+                lastX = nextX
+                params.x = nextX
+                params.y = nextY
+                applyPoseFx(view, poseFx, progress)
+                updateLayout()
+                listener.onPetMoved(params.toPetBounds())
+                view.invalidate()
+            },
+            onFinished = {
+                resetMotionPose(view)
+                updateLayout()
+                listener.onPetMoved(params.toPetBounds())
+                onFinished()
+            },
+        )
+    }
+
     fun cancelAutonomousMotion() {
         if (Looper.myLooper() != Looper.getMainLooper()) {
             handler.post { cancelAutonomousMotion() }
@@ -287,6 +363,8 @@ class PetOverlayController(
         }
         autonomousAnimator?.cancel()
         autonomousAnimator = null
+        sequencePlayer.cancel()
+        petView?.let(::resetMotionPose)
     }
 
     private fun movementProgress(curve: MotionCurve, rawT: Float): Float {
@@ -364,6 +442,43 @@ class PetOverlayController(
         view.rotation = 0f
         view.scaleX = 1f
         view.scaleY = 1f
+    }
+
+    private fun applyPoseFx(
+        view: PetSpriteView,
+        poseFx: PoseFx,
+        progress: Float,
+    ) {
+        if (poseFx == PoseFx.None) {
+            resetMotionPose(view)
+            return
+        }
+        val clampedProgress = progress.coerceIn(0f, 1f)
+        val bobWave = if (poseFx.bobCycles > 0f) {
+            sin(2.0 * PI * clampedProgress * poseFx.bobCycles).toFloat()
+        } else {
+            0f
+        }
+        val rotationWave = if (poseFx.rotationCycles > 0f) {
+            sin(2.0 * PI * clampedProgress * poseFx.rotationCycles).toFloat()
+        } else {
+            0f
+        }
+        val bodyCycle = when {
+            poseFx.bobCycles > 0f -> poseFx.bobCycles
+            poseFx.rotationCycles > 0f -> poseFx.rotationCycles
+            else -> 1f
+        }
+        val bodyWave = ((sin(2.0 * PI * clampedProgress * bodyCycle).toFloat() + 1f) * 0.5f)
+            .coerceIn(0f, 1f)
+        val squash = poseFx.squashAmount * bodyWave
+        val stretch = poseFx.stretchAmount * bodyWave
+
+        view.translationX = 0f
+        view.translationY = poseFx.bobPx * bobWave
+        view.rotation = poseFx.rotationDeg * rotationWave
+        view.scaleX = (1f + squash - stretch * 0.45f).coerceIn(0.92f, 1.08f)
+        view.scaleY = (1f - squash + stretch).coerceIn(0.92f, 1.08f)
     }
 
     fun isMinimized(): Boolean = isMinimized

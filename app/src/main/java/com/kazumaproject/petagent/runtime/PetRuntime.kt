@@ -5,6 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.Choreographer
 import com.kazumaproject.petagent.agent.AgentEvent
+import com.kazumaproject.petagent.behavior.BehaviorIntent
 import com.kazumaproject.petagent.behavior.BehaviorReason
 import com.kazumaproject.petagent.behavior.PetBehaviorIds
 import com.kazumaproject.petagent.behavior.PetBehaviorSettingsRepository
@@ -16,8 +17,10 @@ import com.kazumaproject.petagent.behavior.SpeciesBehaviorProfile
 import com.kazumaproject.petagent.data.behavior.PetBehaviorRepository
 import com.kazumaproject.petagent.data.memory.PetMemoryRepository
 import com.kazumaproject.petagent.llm.PetConversationEngine
+import com.kazumaproject.petagent.motion.MotionPhase
 import com.kazumaproject.petagent.motion.MotionPlan
 import com.kazumaproject.petagent.motion.PetMotionController
+import com.kazumaproject.petagent.motion.PetMotionDirector
 import com.kazumaproject.petagent.motion.PetMotionPlanner
 import com.kazumaproject.petagent.overlay.PetSpriteView
 import com.kazumaproject.petagent.petpack.PetPack
@@ -41,17 +44,22 @@ class PetRuntime(
     private val conversationEngine: PetConversationEngine,
     private val conversationLanguageProvider: () -> String,
     private val coroutineScope: CoroutineScope,
+    private val animationQuality: PetAnimationQuality = PetAnimationQuality.NORMAL,
     private val onStateChanged: (PetState) -> Unit = {},
     private val onUiRequest: (PetUiRequest) -> Unit = {},
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val choreographer = Choreographer.getInstance()
+    private val motionDirector = PetMotionDirector(petPack, motionPlanner)
     private val petId = petPack.manifest.petId
     private val speciesName = petPack.manifest.species
+    private val idleAnimationKey = petPack.resolveAnimationKeyOrFallback("idle_smooth", "idle")
     private var running = false
     private var brainThinking = false
     private var lastStepAtMs = 0L
     private var currentRequestedAnimationKey: String? = null
+    private var sequenceAnimationKey: String? = null
+    private var sequenceAnimationRestartPending = false
     private var conversationJob: Job? = null
     private var lastProactiveConversationAtMs = 0L
     private var state = PetState.initial(SystemClock.uptimeMillis())
@@ -88,7 +96,7 @@ class PetRuntime(
         running = false
         choreographer.removeFrameCallback(frameCallback)
         handler.removeCallbacks(brainTickRunnable)
-        petMotionController.cancelAutonomousMotion()
+        cancelRuntimeMotion()
         conversationJob?.cancel()
         conversationJob = null
         conversationEngine.close()
@@ -97,6 +105,9 @@ class PetRuntime(
     fun onPetTapped() {
         val nowMs = SystemClock.uptimeMillis()
         val nowWallClockMs = System.currentTimeMillis()
+        if (!state.interaction.isDragging && !state.overlay.isMinimized) {
+            cancelRuntimeMotion()
+        }
         dispatch(PetAction.Tap(nowMs))
         coroutineScope.launch {
             petMemoryRepository.incrementTap(petId, speciesName, nowWallClockMs)
@@ -114,7 +125,7 @@ class PetRuntime(
     }
 
     fun onDragStarted() {
-        petMotionController.cancelAutonomousMotion()
+        cancelRuntimeMotion()
         dispatch(PetAction.DragStarted(SystemClock.uptimeMillis()))
     }
 
@@ -124,7 +135,7 @@ class PetRuntime(
 
     fun onMinimizedChanged(minimized: Boolean) {
         if (minimized) {
-            petMotionController.cancelAutonomousMotion()
+            cancelRuntimeMotion()
             conversationEngine.cancel()
             conversationJob?.cancel()
         }
@@ -147,7 +158,7 @@ class PetRuntime(
 
         conversationJob?.cancel()
         conversationEngine.cancel()
-        petMotionController.cancelAutonomousMotion()
+        cancelRuntimeMotion()
         conversationJob = coroutineScope.launch {
             if (!conversationEngine.isReady()) {
                 onUiRequest(PetUiRequest.RequestLocalModelSetup)
@@ -179,7 +190,7 @@ class PetRuntime(
 
     private fun step(frameTimeNanos: Long) {
         val nowMs = frameTimeNanos / 1_000_000L
-        val requestedAnimation = state.desiredAnimationKey()
+        val requestedAnimation = requestedAnimationKey()
         val targetDelayMs = targetFrameDelayMs(requestedAnimation)
         if (lastStepAtMs != 0L && nowMs - lastStepAtMs < targetDelayMs) {
             return
@@ -236,6 +247,7 @@ class PetRuntime(
     private fun maybeStartProactiveConversation(nowUptimeMs: Long) {
         if (conversationJob?.isActive == true) return
         if (state.agent is AgentState.Thinking || state.agent is AgentState.Speaking) return
+        if (state.body.transientAnimation != null) return
         if (state.interaction.isDragging || state.overlay.isMinimized || petMotionController.isDragging() || petMotionController.isMinimized()) return
         if (nowUptimeMs - lastProactiveConversationAtMs < PROACTIVE_CONVERSATION_INTERVAL_MS) return
 
@@ -250,8 +262,10 @@ class PetRuntime(
                 reason = BehaviorReason.AUTONOMOUS_WANDER,
             )
             if (plan != null && !state.interaction.isDragging && !state.overlay.isMinimized) {
-                startMotion(plan, recordBehavior = true)
-                delay(plan.durationMs.coerceAtMost(PROACTIVE_MOVE_WAIT_MAX_MS))
+                val motionDurationMs = startMotion(plan, recordBehavior = true)
+                if (motionDurationMs != null) {
+                    delay(motionDurationMs.coerceAtMost(PROACTIVE_MOVE_WAIT_MAX_MS))
+                }
             }
             if (!running || state.interaction.isDragging || state.overlay.isMinimized) return@launch
 
@@ -309,7 +323,70 @@ class PetRuntime(
         }
     }
 
-    private fun startMotion(plan: MotionPlan, recordBehavior: Boolean) {
+    private fun startMotion(plan: MotionPlan, recordBehavior: Boolean): Long? {
+        if (!canStartAutonomousMotion()) return null
+        startMotionSequence(plan, recordBehavior)?.let { return it }
+        return startLegacyMotion(plan, recordBehavior)
+    }
+
+    private fun startMotionSequence(plan: MotionPlan, recordBehavior: Boolean): Long? {
+        val pose = petMotionController.currentPose()
+        val world = petMotionController.currentWorld(behaviorProfile.species)
+        val sequence = motionDirector.buildSequence(
+            intent = intentFor(plan),
+            pose = pose,
+            world = world,
+            species = speciesName,
+        )
+        val movePhase = sequence.phases.lastOrNull { it is MotionPhase.Move } as? MotionPhase.Move
+            ?: return null
+        val totalDurationMs = sequence.phases.sumOf { phase ->
+            when (phase) {
+                is MotionPhase.Animation -> phase.durationMs
+                is MotionPhase.Move -> phase.durationMs
+                is MotionPhase.Settle -> phase.durationMs
+            }
+        }
+        val nowUptimeMs = SystemClock.uptimeMillis()
+        val nowWallClockMs = System.currentTimeMillis()
+        dispatch(PetAction.AutonomousMoveStarted(nowUptimeMs))
+        if (recordBehavior) {
+            coroutineScope.launch {
+                petBehaviorRepository.record(
+                    petId = petId,
+                    species = speciesName,
+                    occurredAtMs = nowWallClockMs,
+                    behaviorId = behaviorIdFor(plan),
+                    locomotionMode = plan.locomotionMode,
+                    reason = plan.reason,
+                    fromX = pose.x,
+                    fromY = pose.y,
+                    toX = movePhase.targetX,
+                    toY = movePhase.targetY,
+                )
+            }
+        }
+        petMotionController.playSequence(
+            sequence = sequence,
+            currentPose = pose,
+            world = world,
+            onAnimation = { key, restart ->
+                sequenceAnimationKey = key
+                sequenceAnimationRestartPending = restart
+                renderImmediately()
+            },
+            onFinished = {
+                sequenceAnimationKey = null
+                sequenceAnimationRestartPending = false
+                if (running) {
+                    dispatch(PetAction.AutonomousMoveFinished(SystemClock.uptimeMillis()))
+                }
+            },
+        )
+        return totalDurationMs
+    }
+
+    private fun startLegacyMotion(plan: MotionPlan, recordBehavior: Boolean): Long {
         val nowUptimeMs = SystemClock.uptimeMillis()
         val nowWallClockMs = System.currentTimeMillis()
         dispatch(
@@ -341,6 +418,7 @@ class PetRuntime(
                 dispatch(PetAction.AutonomousMoveFinished(SystemClock.uptimeMillis()))
             }
         }
+        return plan.durationMs
     }
 
     private fun behaviorIdFor(plan: MotionPlan): String {
@@ -449,23 +527,100 @@ class PetRuntime(
     }
 
     private fun applyAnimation(frameTimeNanos: Long) {
-        val requestedAnimation = state.desiredAnimationKey()
-        if (requestedAnimation == currentRequestedAnimationKey) return
+        val requestedAnimation = requestedAnimationKey()
+        val restart = sequenceAnimationRestartPending
+        if (!restart && requestedAnimation == currentRequestedAnimationKey) return
         currentRequestedAnimationKey = requestedAnimation
-        petView.setAnimation(requestedAnimation, frameTimeNanos)
+        sequenceAnimationRestartPending = false
+        petView.setAnimation(requestedAnimation, frameTimeNanos, restart = restart)
+    }
+
+    private fun requestedAnimationKey(): String {
+        val stateAnimation = state.desiredAnimationKey()
+        val criticalStateActive = state.interaction.isDragging ||
+            state.overlay.isMinimized ||
+            !state.overlay.isVisible ||
+            state.agent is AgentState.Thinking ||
+            state.agent is AgentState.Speaking
+        if (!criticalStateActive) {
+            sequenceAnimationKey?.let { return it }
+        }
+        return if (stateAnimation == "idle") idleAnimationKey else stateAnimation
     }
 
     private fun targetFrameDelayMs(animationKey: String): Long {
         val animationFps = petView.animationFps(animationKey).coerceAtLeast(1)
+        val caps = animationQuality.caps()
         val effectiveFps = when {
             !state.overlay.isVisible -> 1
             state.overlay.isMinimized -> min(animationFps, 4)
-            state.need.isSleeping -> min(animationFps, 4)
-            animationKey == "idle" -> min(animationFps, 8)
-            else -> min(animationFps, 12)
+            state.need.isSleeping -> min(animationFps, caps.idleFps)
+            animationKey.isIdleLikeAnimation() -> min(animationFps, caps.idleFps)
+            animationKey.isMovementAnimation() -> min(animationFps, caps.movementFps)
+            else -> min(animationFps, caps.normalFps)
         }.coerceAtLeast(1)
 
         return 1_000L / effectiveFps
+    }
+
+    private fun intentFor(plan: MotionPlan): BehaviorIntent {
+        return when (plan.reason) {
+            BehaviorReason.PREPARE_BREAK,
+            BehaviorReason.BREAK_DUE,
+            -> BehaviorIntent.ApproachForBreakReminder(plan.reason)
+            else -> BehaviorIntent.Wander(reason = plan.reason, urgency = 0.5f)
+        }
+    }
+
+    private fun canStartAutonomousMotion(): Boolean {
+        if (state.interaction.isDragging || state.overlay.isMinimized) return false
+        if (petMotionController.isDragging() || petMotionController.isMinimized()) return false
+        if (state.body.transientAnimation != null) return false
+        if (state.agent is AgentState.Thinking || state.agent is AgentState.Speaking) return false
+        return true
+    }
+
+    private fun cancelRuntimeMotion() {
+        petMotionController.cancelAutonomousMotion()
+        sequenceAnimationKey = null
+        sequenceAnimationRestartPending = false
+    }
+
+    private fun PetAnimationQuality.caps(): AnimationFpsCaps {
+        return when (this) {
+            PetAnimationQuality.BATTERY_SAVE -> AnimationFpsCaps(
+                idleFps = 6,
+                normalFps = 8,
+                movementFps = 12,
+            )
+            PetAnimationQuality.NORMAL -> AnimationFpsCaps(
+                idleFps = 8,
+                normalFps = 12,
+                movementFps = 16,
+            )
+            PetAnimationQuality.SMOOTH -> AnimationFpsCaps(
+                idleFps = 12,
+                normalFps = 24,
+                movementFps = 30,
+            )
+        }
+    }
+
+    private fun String.isIdleLikeAnimation(): Boolean {
+        return this == "idle" ||
+            this == "idle_smooth" ||
+            this == "perch_idle_loop" ||
+            this == "sleep"
+    }
+
+    private fun String.isMovementAnimation(): Boolean {
+        return contains("walk") ||
+            contains("lumber") ||
+            contains("fly") ||
+            contains("glide") ||
+            contains("hop") ||
+            contains("takeoff") ||
+            contains("landing")
     }
 
     private fun String.isRecoverableModelSetupError(): Boolean {
@@ -484,6 +639,12 @@ class PetRuntime(
         const val PROACTIVE_CONVERSATION_INTERVAL_MS = 90_000L
         const val PROACTIVE_MOVE_WAIT_MAX_MS = 4_500L
     }
+
+    private data class AnimationFpsCaps(
+        val idleFps: Int,
+        val normalFps: Int,
+        val movementFps: Int,
+    )
 }
 
 sealed interface PetUiRequest {

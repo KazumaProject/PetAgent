@@ -14,6 +14,22 @@ class PetMotionController(
         overlayController.animateTo(plan, onFinished)
     }
 
+    fun playSequence(
+        sequence: MotionSequence,
+        currentPose: PetPose,
+        world: PetWorld,
+        onAnimation: (key: String, restart: Boolean) -> Unit,
+        onFinished: () -> Unit,
+    ) {
+        overlayController.playSequence(
+            sequence = sequence,
+            currentPose = currentPose,
+            world = world,
+            onAnimation = onAnimation,
+            onFinished = onFinished,
+        )
+    }
+
     fun cancelAutonomousMotion() {
         overlayController.cancelAutonomousMotion()
     }

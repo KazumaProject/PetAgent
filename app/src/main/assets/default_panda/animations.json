@@ -60,7 +60,7 @@
     "frameWidth": 256,
     "frameHeight": 256,
     "frameCount": 16,
-    "fps": 9,
+    "fps": 12,
     "loop": true
   },
   "sit": {
@@ -148,6 +148,132 @@
     "hungry": "confused",
     "thirsty": "confused",
     "lumber_left": "walk_left",
-    "lumber_right": "walk_right"
+    "lumber_right": "walk_right",
+    "idle_smooth": "idle",
+    "prepare_walk_left": "walk_left",
+    "prepare_walk_right": "walk_right",
+    "stop_left": "idle",
+    "stop_right": "idle",
+    "turn_left": "look_left",
+    "turn_right": "look_right",
+    "sit_loop": "sit",
+    "sit_to_idle": "idle",
+    "scratch": "confused",
+    "sniff": "look_left",
+    "yawn": "sleep",
+    "stretch": "idle",
+    "roll": "sleep"
+  },
+  "idle_smooth": {
+    "sprite": "sprites/idle_smooth.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 24,
+    "fps": 24,
+    "loop": true
+  },
+  "prepare_walk_left": {
+    "sprite": "sprites/prepare_walk_left.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 8,
+    "fps": 16,
+    "loop": false
+  },
+  "prepare_walk_right": {
+    "sprite": "sprites/prepare_walk_right.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 8,
+    "fps": 16,
+    "loop": false
+  },
+  "stop_left": {
+    "sprite": "sprites/stop_left.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 8,
+    "fps": 14,
+    "loop": false
+  },
+  "stop_right": {
+    "sprite": "sprites/stop_right.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 8,
+    "fps": 14,
+    "loop": false
+  },
+  "turn_left": {
+    "sprite": "sprites/turn_left.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 8,
+    "fps": 12,
+    "loop": false
+  },
+  "turn_right": {
+    "sprite": "sprites/turn_right.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 8,
+    "fps": 12,
+    "loop": false
+  },
+  "sit_loop": {
+    "sprite": "sprites/sit_loop.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 16,
+    "fps": 12,
+    "loop": true
+  },
+  "sit_to_idle": {
+    "sprite": "sprites/sit_to_idle.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 8,
+    "fps": 10,
+    "loop": false
+  },
+  "scratch": {
+    "sprite": "sprites/scratch.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 12,
+    "fps": 14,
+    "loop": false
+  },
+  "sniff": {
+    "sprite": "sprites/sniff.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 8,
+    "fps": 10,
+    "loop": false
+  },
+  "yawn": {
+    "sprite": "sprites/yawn.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 8,
+    "fps": 8,
+    "loop": false
+  },
+  "stretch": {
+    "sprite": "sprites/stretch.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 12,
+    "fps": 12,
+    "loop": false
+  },
+  "roll": {
+    "sprite": "sprites/roll.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 12,
+    "fps": 12,
+    "loop": false
   }
 }

@@ -1,12 +1,26 @@
 package com.kazumaproject.petagent.motion
 
-import android.graphics.Point
-
 data class PetWorld(
     val screenWidth: Int,
     val screenHeight: Int,
     val petSizePx: Int,
-    val floorBandTop: Int,
-    val floorBandBottom: Int,
-    val perchPoints: List<Point>,
+    val floorZone: FloorZone,
+    val perchPoints: List<WorldPoint>,
+) {
+    val floorBandTop: Int
+        get() = floorZone.top
+
+    val floorBandBottom: Int
+        get() = floorZone.bottom
+}
+
+data class FloorZone(
+    val top: Int,
+    val bottom: Int,
+    val preferredY: Int,
+)
+
+data class WorldPoint(
+    val x: Int,
+    val y: Int,
 )
