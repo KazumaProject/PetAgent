@@ -6,35 +6,29 @@ import android.graphics.Rect
 import android.os.Build
 import android.view.Gravity
 import android.view.WindowManager
-import com.kazumaproject.petagent.breakreminder.BreakStatus
 import kotlin.math.roundToInt
 
 class PetBreakStatusPanelController(
     private val context: Context,
     private val windowManager: WindowManager,
-    private val onBreakNowClicked: () -> Unit,
-    private val onSnoozeClicked: () -> Unit,
     private val onSettingsClicked: () -> Unit,
+    private val onTalkClicked: () -> Unit,
 ) {
     private var panelView: PetBreakStatusPanelView? = null
 
-    fun showNearPet(petBounds: Rect, status: BreakStatus) {
+    fun showNearPet(petBounds: Rect) {
         removeAll()
         val view = PetBreakStatusPanelView(
             context = context,
-            status = status,
-            onBreakNowClicked = {
-                removeAll()
-                onBreakNowClicked()
-            },
-            onSnoozeClicked = {
-                removeAll()
-                onSnoozeClicked()
-            },
             onSettingsClicked = {
                 removeAll()
                 onSettingsClicked()
             },
+            onTalkClicked = {
+                removeAll()
+                onTalkClicked()
+            },
+            onCloseClicked = { removeAll() },
         )
         val params = panelLayoutParams(petBounds)
         panelView = view

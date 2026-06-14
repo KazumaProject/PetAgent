@@ -47,6 +47,22 @@
     "fps": 10,
     "loop": true
   },
+  "lumber_left": {
+    "sprite": "sprites/lumber_left.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 16,
+    "fps": 9,
+    "loop": true
+  },
+  "lumber_right": {
+    "sprite": "sprites/lumber_right.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 16,
+    "fps": 9,
+    "loop": true
+  },
   "sit": {
     "sprite": "sprites/sit.png",
     "frameWidth": 256,
@@ -130,6 +146,8 @@
     "drink": "happy",
     "refuse": "confused",
     "hungry": "confused",
-    "thirsty": "confused"
+    "thirsty": "confused",
+    "lumber_left": "walk_left",
+    "lumber_right": "walk_right"
   }
 }

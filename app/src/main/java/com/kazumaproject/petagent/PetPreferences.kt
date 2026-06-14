@@ -18,6 +18,7 @@ object PetPreferences {
     const val KEY_AUTONOMOUS_BEHAVIOR_FREQUENCY = "autonomous_behavior_frequency"
     const val KEY_AUTONOMOUS_MOVE_ENABLED = "autonomous_move_enabled"
     const val KEY_APPROACH_BEFORE_BREAK_ENABLED = "approach_before_break_enabled"
+    const val KEY_CONVERSATION_LANGUAGE = "conversation_language"
     const val DEFAULT_PET_ID = "default_african_scops_owl"
     const val DEFAULT_PET_BASE_PATH = "default_african_scops_owl"
     const val DEFAULT_BREAK_REMINDER_ENABLED = true
@@ -31,6 +32,7 @@ object PetPreferences {
     const val DEFAULT_AUTONOMOUS_BEHAVIOR_FREQUENCY = "normal"
     const val DEFAULT_AUTONOMOUS_MOVE_ENABLED = true
     const val DEFAULT_APPROACH_BEFORE_BREAK_ENABLED = true
+    const val DEFAULT_CONVERSATION_LANGUAGE = "ja"
 
     fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 

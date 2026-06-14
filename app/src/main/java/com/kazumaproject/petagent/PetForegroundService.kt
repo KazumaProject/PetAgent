@@ -10,7 +10,9 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Rect
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.WindowManager
@@ -19,21 +21,24 @@ import androidx.core.content.ContextCompat
 import com.kazumaproject.petagent.behavior.PetBehaviorSettingsRepository
 import com.kazumaproject.petagent.behavior.PetBrain
 import com.kazumaproject.petagent.behavior.SpeciesBehaviorProfile
-import com.kazumaproject.petagent.breakreminder.BreakReminderEngine
-import com.kazumaproject.petagent.breakreminder.BreakReminderRepository
-import com.kazumaproject.petagent.breakreminder.BreakReminderSettingsRepository
 import com.kazumaproject.petagent.data.PetAgentDatabase
 import com.kazumaproject.petagent.data.behavior.PetBehaviorRepository
 import com.kazumaproject.petagent.data.memory.PetMemoryRepository
+import com.kazumaproject.petagent.llm.LocalLlmConversationEngine
+import com.kazumaproject.petagent.llm.LocalModelDownloader
+import com.kazumaproject.petagent.llm.LocalModelRepository
+import com.kazumaproject.petagent.llm.LocalModelState
 import com.kazumaproject.petagent.motion.PetMotionController
 import com.kazumaproject.petagent.motion.PetMotionPlanner
-import com.kazumaproject.petagent.overlay.PetBreakReminderBubbleController
 import com.kazumaproject.petagent.overlay.PetBreakStatusPanelController
+import com.kazumaproject.petagent.overlay.PetConversationBubbleController
 import com.kazumaproject.petagent.overlay.PetOverlayController
 import com.kazumaproject.petagent.petpack.PetCatalogLoader
 import com.kazumaproject.petagent.petpack.PetPack
 import com.kazumaproject.petagent.petpack.PetPackLoader
+import com.kazumaproject.petagent.runtime.AgentState
 import com.kazumaproject.petagent.runtime.PetRuntime
+import com.kazumaproject.petagent.runtime.PetState
 import com.kazumaproject.petagent.runtime.PetUiRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,13 +47,17 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 class PetForegroundService : Service(), PetOverlayController.Listener {
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     private var overlayController: PetOverlayController? = null
-    private var breakReminderBubbleController: PetBreakReminderBubbleController? = null
     private var breakStatusPanelController: PetBreakStatusPanelController? = null
+    private var conversationBubbleController: PetConversationBubbleController? = null
     private var runtime: PetRuntime? = null
     private var serviceScope: CoroutineScope? = null
     private var currentPetPack: PetPack? = null
+    private var localModelRepository: LocalModelRepository? = null
+    private var localModelDownloader: LocalModelDownloader? = null
     private var latestPetBounds: Rect? = null
+    private var latestConversationText = ""
     private var isMinimized = false
 
     override fun onCreate() {
@@ -70,10 +79,6 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
             ACTION_UPDATE_SETTINGS -> {
                 return if (updatePetSettings(startId)) START_STICKY else START_NOT_STICKY
             }
-            ACTION_TEST_REMINDER -> {
-                runtime?.showTestBreakReminder() ?: stopSelf(startId)
-                return if (runtime != null) START_STICKY else START_NOT_STICKY
-            }
             ACTION_START -> startPet()
         }
         return START_STICKY
@@ -93,8 +98,8 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
 
     override fun onDragStarted(petBounds: Rect) {
         latestPetBounds = petBounds
-        breakReminderBubbleController?.removeAll()
         breakStatusPanelController?.removeAll()
+        conversationBubbleController?.removeAll()
         runtime?.onDragStarted()
     }
 
@@ -111,8 +116,8 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
         isMinimized = minimized
         latestPetBounds = petBounds
         if (minimized) {
-            breakReminderBubbleController?.removeAll()
             breakStatusPanelController?.removeAll()
+            conversationBubbleController?.removeAll()
         }
         runtime?.onMinimizedChanged(minimized)
         updateNotification()
@@ -135,40 +140,38 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
             val view = overlay.view ?: error("Overlay view was not created.")
             val windowManager = getSystemService(WindowManager::class.java)
             val database = PetAgentDatabase.getInstance(this)
-            val breakReminderRepository = BreakReminderRepository(database.breakReminderDao())
             val petMemoryRepository = PetMemoryRepository(database.petMemoryDao())
             val petBehaviorRepository = PetBehaviorRepository(database.petBehaviorDao())
-            val breakReminderSettingsRepository = BreakReminderSettingsRepository(this)
             val petBehaviorSettingsRepository = PetBehaviorSettingsRepository(this)
+            val modelRepository = LocalModelRepository(this)
+            val modelDownloader = LocalModelDownloader(this, modelRepository)
+            val conversationEngine = LocalLlmConversationEngine(this, modelRepository)
             val profile = SpeciesBehaviorProfile.fromManifest(
                 manifest = settings.petPack.manifest,
                 availableAnimationKeys = settings.petPack.animations.keys,
             )
             val motionPlanner = PetMotionPlanner(settings.petPack)
-            val breakReminderEngine = BreakReminderEngine(breakReminderRepository)
             val brain = PetBrain(
                 behaviorProfile = profile,
                 motionPlanner = motionPlanner,
-                breakReminderEngine = breakReminderEngine,
-                breakReminderRepository = breakReminderRepository,
-                petMemoryRepository = petMemoryRepository,
-                petBehaviorRepository = petBehaviorRepository,
             )
             val motionController = PetMotionController(overlay)
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-            val bubbleController = PetBreakReminderBubbleController(
-                context = this,
-                windowManager = windowManager,
-                onAcceptClicked = { runtime?.acceptBreak() },
-                onSnoozeClicked = { runtime?.snoozeBreak() },
-                onDismissTodayClicked = { runtime?.dismissBreakToday() },
-            )
             val statusPanelController = PetBreakStatusPanelController(
                 context = this,
                 windowManager = windowManager,
-                onBreakNowClicked = { runtime?.acceptBreak() },
-                onSnoozeClicked = { runtime?.snoozeBreak() },
                 onSettingsClicked = { openSettingsActivity() },
+                onTalkClicked = { runtime?.requestTalk() },
+            )
+            val conversationController = PetConversationBubbleController(
+                context = this,
+                windowManager = windowManager,
+                onSendMessage = { message ->
+                    latestConversationText = ""
+                    runtime?.submitUserMessage(message)
+                },
+                onDownloadWifiClicked = { startLocalModelDownload(allowMobileData = false) },
+                onDownloadMobileClicked = { startLocalModelDownload(allowMobileData = true) },
             )
             val petRuntime = PetRuntime(
                 petView = view,
@@ -176,22 +179,24 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
                 behaviorProfile = profile,
                 petBrain = brain,
                 motionPlanner = motionPlanner,
-                breakReminderEngine = breakReminderEngine,
-                breakReminderRepository = breakReminderRepository,
-                breakReminderSettingsRepository = breakReminderSettingsRepository,
                 petMemoryRepository = petMemoryRepository,
                 petBehaviorRepository = petBehaviorRepository,
                 petBehaviorSettingsRepository = petBehaviorSettingsRepository,
                 petMotionController = motionController,
+                conversationEngine = conversationEngine,
+                conversationLanguageProvider = { conversationLanguage() },
                 coroutineScope = scope,
+                onStateChanged = { state -> handlePetStateChanged(state) },
                 onUiRequest = { request -> handleUiRequest(request) },
             )
 
             overlayController = overlay
-            breakReminderBubbleController = bubbleController
             breakStatusPanelController = statusPanelController
+            conversationBubbleController = conversationController
             serviceScope = scope
             currentPetPack = settings.petPack
+            localModelRepository = modelRepository
+            localModelDownloader = modelDownloader
             latestPetBounds = overlay.currentPetBounds()
             runtime = petRuntime
             petRuntime.start()
@@ -203,30 +208,130 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
 
     private fun handleUiRequest(request: PetUiRequest) {
         when (request) {
-            PetUiRequest.OpenBreakStatus -> showBreakStatusPanel()
-            is PetUiRequest.ShowBreakReminder -> {
-                if (isMinimized) return
-                val bounds = latestPetBounds ?: overlayController?.currentPetBounds() ?: return
-                breakStatusPanelController?.removeAll()
-                breakReminderBubbleController?.showNearPet(
-                    petBounds = bounds,
-                    message = request.message,
-                    activeMinutes = request.activeMinutes,
-                    tone = request.tone,
+            PetUiRequest.OpenPetPanel -> showPetPanel()
+            PetUiRequest.OpenConversationInput -> showConversationInput()
+            PetUiRequest.RequestLocalModelSetup -> showLocalModelSetup()
+        }
+    }
+
+    private fun showPetPanel() {
+        if (isMinimized) return
+        val bounds = latestPetBounds ?: overlayController?.currentPetBounds() ?: return
+        conversationBubbleController?.removeAll()
+        breakStatusPanelController?.showNearPet(bounds)
+    }
+
+    private fun showConversationInput() {
+        if (isMinimized) return
+        val bounds = currentPetBoundsForBubble() ?: return
+        breakStatusPanelController?.removeAll()
+        conversationBubbleController?.showInput(bounds)
+    }
+
+    private fun showLocalModelSetup() {
+        if (isMinimized) return
+        val bounds = currentPetBoundsForBubble() ?: return
+        val repository = localModelRepository ?: return
+        breakStatusPanelController?.removeAll()
+        conversationBubbleController?.showModelSetup(
+            petBounds = bounds,
+            metadata = repository.selectedModel(),
+            state = repository.state(),
+        )
+    }
+
+    private fun startLocalModelDownload(allowMobileData: Boolean) {
+        if (isMinimized) return
+        val repository = localModelRepository ?: return
+        val downloader = localModelDownloader ?: return
+        val bounds = currentPetBoundsForBubble() ?: return
+        val scope = serviceScope ?: return
+        val metadata = repository.selectedModel()
+        repository.setMobileDataAllowed(allowMobileData)
+        conversationBubbleController?.showModelSetup(
+            petBounds = bounds,
+            metadata = metadata,
+            state = LocalModelState.Downloading(progress = 0),
+        )
+        scope.launch {
+            val result = downloader.download(
+                metadata = metadata,
+                allowMobileData = allowMobileData,
+                onProgress = { progress ->
+                    mainHandler.post {
+                        if (!isMinimized) {
+                            conversationBubbleController?.showModelSetup(
+                                petBounds = currentPetBoundsForBubble() ?: bounds,
+                                metadata = metadata,
+                                state = LocalModelState.Downloading(progress),
+                            )
+                        }
+                    }
+                },
+            )
+            val latestBounds = currentPetBoundsForBubble() ?: bounds
+            if (result.isSuccess) {
+                conversationBubbleController?.showInput(latestBounds)
+            } else {
+                conversationBubbleController?.showModelSetup(
+                    petBounds = latestBounds,
+                    metadata = metadata,
+                    state = repository.state(),
                 )
             }
         }
     }
 
-    private fun showBreakStatusPanel() {
+    private fun handlePetStateChanged(state: PetState) {
         if (isMinimized) return
-        val petRuntime = runtime ?: return
-        val bounds = latestPetBounds ?: overlayController?.currentPetBounds() ?: return
-        serviceScope?.launch {
-            val status = petRuntime.currentBreakStatus()
-            breakReminderBubbleController?.removeAll()
-            breakStatusPanelController?.showNearPet(bounds, status)
+        val bounds = currentPetBoundsForBubble() ?: return
+        when (val agent = state.agent) {
+            AgentState.Thinking -> {
+                latestConversationText = ""
+                conversationBubbleController?.showResponse(
+                    petBounds = bounds,
+                    text = "",
+                    isWorking = true,
+                )
+            }
+            is AgentState.Speaking -> {
+                latestConversationText = agent.text
+                conversationBubbleController?.showResponse(
+                    petBounds = bounds,
+                    text = agent.text,
+                    isWorking = true,
+                )
+            }
+            AgentState.Completed -> {
+                if (latestConversationText.isNotBlank()) {
+                    conversationBubbleController?.showResponse(
+                        petBounds = bounds,
+                        text = latestConversationText,
+                        isWorking = false,
+                    )
+                }
+            }
+            is AgentState.Failed -> {
+                conversationBubbleController?.showResponse(
+                    petBounds = bounds,
+                    text = agent.message,
+                    isWorking = false,
+                    isError = true,
+                )
+            }
+            AgentState.Idle -> Unit
         }
+    }
+
+    private fun currentPetBoundsForBubble(): Rect? {
+        return latestPetBounds ?: overlayController?.currentPetBounds()
+    }
+
+    private fun conversationLanguage(): String {
+        return PetPreferences.prefs(this).getString(
+            PetPreferences.KEY_CONVERSATION_LANGUAGE,
+            PetPreferences.DEFAULT_CONVERSATION_LANGUAGE,
+        ) ?: PetPreferences.DEFAULT_CONVERSATION_LANGUAGE
     }
 
     private fun openSettingsActivity() {
@@ -281,14 +386,17 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
         runtime = null
         overlayController?.remove()
         overlayController = null
-        breakReminderBubbleController?.removeAll()
-        breakReminderBubbleController = null
         breakStatusPanelController?.removeAll()
         breakStatusPanelController = null
+        conversationBubbleController?.removeAll()
+        conversationBubbleController = null
         serviceScope?.cancel()
         serviceScope = null
         currentPetPack = null
+        localModelRepository = null
+        localModelDownloader = null
         latestPetBounds = null
+        latestConversationText = ""
         isMinimized = false
     }
 
@@ -330,7 +438,7 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("Floating pet is awake")
-            .setContentText("Your pet can move around and suggest healthy breaks.")
+            .setContentText("Your pet can move around and talk locally.")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -395,7 +503,6 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
         private const val ACTION_STOP = "com.kazumaproject.petagent.action.STOP"
         private const val ACTION_TOGGLE_PEEK = "com.kazumaproject.petagent.action.TOGGLE_PEEK"
         private const val ACTION_UPDATE_SETTINGS = "com.kazumaproject.petagent.action.UPDATE_SETTINGS"
-        private const val ACTION_TEST_REMINDER = "com.kazumaproject.petagent.action.TEST_REMINDER"
 
         fun start(context: Context) {
             val intent = Intent(context, PetForegroundService::class.java).setAction(ACTION_START)
@@ -413,10 +520,5 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
             context.startService(intent)
         }
 
-        fun showTestReminder(context: Context) {
-            val intent = Intent(context, PetForegroundService::class.java)
-                .setAction(ACTION_TEST_REMINDER)
-            context.startService(intent)
-        }
     }
 }

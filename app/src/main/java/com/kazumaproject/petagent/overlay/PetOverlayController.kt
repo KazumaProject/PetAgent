@@ -24,6 +24,8 @@ import com.kazumaproject.petagent.motion.PetPose
 import com.kazumaproject.petagent.motion.PetWorld
 import com.kazumaproject.petagent.petpack.PetPack
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.floor
 import kotlin.math.PI
 import kotlin.math.max
 import kotlin.math.min
@@ -222,24 +224,34 @@ class PetOverlayController(
             duration = plan.durationMs
             interpolator = when (plan.curve) {
                 MotionCurve.LINEAR -> LinearInterpolator()
+                MotionCurve.PANDA_QUADRUPED_LUMBER,
+                MotionCurve.OWL_HOP,
+                MotionCurve.OWL_TAKEOFF_GLIDE_LAND,
+                -> LinearInterpolator()
                 else -> AccelerateDecelerateInterpolator()
             }
             addUpdateListener { animator ->
                 val rawT = animator.animatedValue as Float
-                val t = when (plan.curve) {
-                    MotionCurve.LINEAR -> rawT
-                    MotionCurve.EASE_IN_OUT,
-                    MotionCurve.HEAVY_PANDA_STEP,
-                    MotionCurve.OWL_ARC,
-                    -> rawT * rawT * (3f - 2f * rawT)
-                }
+                val t = movementProgress(plan.curve, rawT)
                 val arcY = when (plan.curve) {
                     MotionCurve.OWL_ARC -> -dp(34) * sin(PI * rawT).toFloat()
-                    MotionCurve.HEAVY_PANDA_STEP -> dp(3) * sin(PI * rawT * 6f).toFloat()
+                    MotionCurve.OWL_HOP -> -dp(22) * sin(PI * rawT).toFloat()
+                    MotionCurve.OWL_TAKEOFF_GLIDE_LAND -> {
+                        val glideLift = -dp(58) * sin(PI * rawT).toFloat()
+                        val wingBeat = dp(5) * sin(PI * rawT * 8f).toFloat()
+                        val landingSettle = if (rawT > 0.72f) {
+                            dp(5) * sin(PI * (rawT - 0.72f) / 0.28f).toFloat()
+                        } else {
+                            0f
+                        }
+                        glideLift + wingBeat + landingSettle
+                    }
+                    MotionCurve.HEAVY_PANDA_STEP -> dp(2) * sin(PI * rawT * 6f).toFloat()
                     else -> 0f
                 }
                 params.x = (startX + (targetX - startX) * t).roundToInt().coerceIn(0, maxX)
                 params.y = (startY + (targetY - startY) * t + arcY).roundToInt().coerceIn(0, maxY)
+                applyMotionPose(view, plan.curve, rawT, targetX - startX, targetY - startY)
                 updateLayout()
                 listener.onPetMoved(params.toPetBounds())
                 view.invalidate()
@@ -248,12 +260,14 @@ class PetOverlayController(
                 override fun onAnimationCancel(animation: Animator) {
                     if (autonomousAnimator == animation) {
                         autonomousAnimator = null
+                        resetMotionPose(view)
                     }
                 }
 
                 override fun onAnimationEnd(animation: Animator) {
                     if (autonomousAnimator == animation) {
                         autonomousAnimator = null
+                        resetMotionPose(view)
                         params.x = targetX
                         params.y = targetY
                         updateLayout()
@@ -273,6 +287,83 @@ class PetOverlayController(
         }
         autonomousAnimator?.cancel()
         autonomousAnimator = null
+    }
+
+    private fun movementProgress(curve: MotionCurve, rawT: Float): Float {
+        return when (curve) {
+            MotionCurve.LINEAR -> rawT
+            MotionCurve.PANDA_QUADRUPED_LUMBER -> quadrupedStepProgress(rawT)
+            MotionCurve.EASE_IN_OUT,
+            MotionCurve.HEAVY_PANDA_STEP,
+            MotionCurve.OWL_ARC,
+            MotionCurve.OWL_HOP,
+            MotionCurve.OWL_TAKEOFF_GLIDE_LAND,
+            -> smoothStep(rawT)
+        }.coerceIn(0f, 1f)
+    }
+
+    private fun quadrupedStepProgress(rawT: Float): Float {
+        val stepCount = 8f
+        val scaled = rawT * stepCount
+        val whole = floor(scaled).coerceIn(0f, stepCount - 1f)
+        val local = (scaled - whole).coerceIn(0f, 1f)
+        val plantedPush = if (local < 0.42f) {
+            local * 0.50f / 0.42f
+        } else {
+            0.50f + smoothStep((local - 0.42f) / 0.58f) * 0.50f
+        }
+        return (whole + plantedPush) / stepCount
+    }
+
+    private fun smoothStep(t: Float): Float {
+        val clamped = t.coerceIn(0f, 1f)
+        return clamped * clamped * (3f - 2f * clamped)
+    }
+
+    private fun applyMotionPose(
+        view: PetSpriteView,
+        curve: MotionCurve,
+        rawT: Float,
+        deltaX: Int,
+        deltaY: Int,
+    ) {
+        when (curve) {
+            MotionCurve.PANDA_QUADRUPED_LUMBER -> {
+                val footPhase = PI * rawT * 16f
+                val shoulderPhase = PI * rawT * 8f
+                view.translationY = dp(1) * sin(footPhase).toFloat()
+                view.rotation = 0.8f * sin(shoulderPhase).toFloat()
+                view.scaleX = 1f
+                view.scaleY = 1f
+            }
+            MotionCurve.OWL_HOP -> {
+                val lift = sin(PI * rawT).toFloat().coerceAtLeast(0f)
+                view.translationY = -dp(2) * lift
+                view.rotation = 1.0f * sin(PI * rawT).toFloat()
+                view.scaleX = 1f
+                view.scaleY = 1f
+            }
+            MotionCurve.OWL_TAKEOFF_GLIDE_LAND -> {
+                val wingBeat = sin(PI * rawT * 8f).toFloat()
+                val slopeDegrees = Math.toDegrees(
+                    atan2(deltaY.toDouble(), max(abs(deltaX), 1).toDouble()),
+                ).toFloat()
+                view.translationY = dp(2) * wingBeat
+                view.rotation = (slopeDegrees * 0.05f + 1.2f * sin(PI * rawT * 2f).toFloat())
+                    .coerceIn(-4f, 4f)
+                view.scaleX = 1f
+                view.scaleY = 1f
+            }
+            else -> resetMotionPose(view)
+        }
+    }
+
+    private fun resetMotionPose(view: PetSpriteView) {
+        view.translationX = 0f
+        view.translationY = 0f
+        view.rotation = 0f
+        view.scaleX = 1f
+        view.scaleY = 1f
     }
 
     fun isMinimized(): Boolean = isMinimized

@@ -35,7 +35,6 @@ object PetReducer {
             )
             is PetAction.AutonomousMoveStarted -> state.copy(
                 need = state.need.copy(lastAutonomousMoveAtMs = action.nowMs, boredom = (state.need.boredom - 0.05f).coerceIn01()),
-                body = state.body.clearTransient(),
             )
             is PetAction.AutonomousMoveFinished -> state.copy(
                 body = state.body.clearTransient(),

@@ -30,6 +30,8 @@
     "canFly": false,
     "preferredModes": [
       "idle",
+      "lumber_left",
+      "lumber_right",
       "walk_left",
       "walk_right",
       "sit",
@@ -41,26 +43,22 @@
   },
   "behaviorProfile": {
     "species": "panda",
-    "movementPlane": "floor",
+    "movementPlane": "free_safe",
     "defaultLocomotion": "heavy_walk",
     "idleBehaviors": ["idle", "blink", "look_left", "look_right", "sit", "sleep"],
     "autonomousBehaviors": [
       {
         "id": "panda_slow_walk",
-        "animationLeft": "walk_left",
-        "animationRight": "walk_right",
-        "minIntervalMs": 90000,
-        "maxDistanceScreenRatio": 0.22
+        "animationLeft": "lumber_left",
+        "animationRight": "lumber_right",
+        "minIntervalMs": 60000,
+        "maxDistanceScreenRatio": 0.34
       },
       {
         "id": "panda_sit",
         "animation": "sit",
         "minIntervalMs": 45000
       }
-    ],
-    "breakPreparation": {
-      "approachMode": "slow_walk",
-      "leadTimeMinutes": 2
-    }
+    ]
   }
 }

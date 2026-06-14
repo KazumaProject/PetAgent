@@ -19,5 +19,8 @@ enum class MotionCurve {
     LINEAR,
     EASE_IN_OUT,
     HEAVY_PANDA_STEP,
+    PANDA_QUADRUPED_LUMBER,
     OWL_ARC,
+    OWL_HOP,
+    OWL_TAKEOFF_GLIDE_LAND,
 }

@@ -1,6 +1,5 @@
 package com.kazumaproject.petagent.behavior
 
-import com.kazumaproject.petagent.breakreminder.BreakReminderTone
 import com.kazumaproject.petagent.motion.MotionPlan
 
 sealed interface PetDecision {
@@ -17,16 +16,5 @@ sealed interface PetDecision {
         val plan: MotionPlan,
     ) : PetDecision
 
-    data class PrepareBreakReminder(
-        val plan: MotionPlan?,
-        val animationKey: String?,
-    ) : PetDecision
-
-    data class ShowBreakReminder(
-        val message: String,
-        val activeMinutes: Int,
-        val tone: BreakReminderTone,
-    ) : PetDecision
-
-    data object ShowBreakStatusPanel : PetDecision
+    data object ShowPetPanel : PetDecision
 }

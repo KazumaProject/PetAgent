@@ -4,7 +4,6 @@ data class PetBehaviorSettings(
     val autonomousBehaviorEnabled: Boolean,
     val autonomousMoveEnabled: Boolean,
     val frequency: PetBehaviorFrequency,
-    val approachBeforeBreakEnabled: Boolean,
 )
 
 enum class PetBehaviorFrequency(val preferenceValue: String) {

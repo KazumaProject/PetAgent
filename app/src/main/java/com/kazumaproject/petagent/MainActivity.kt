@@ -79,7 +79,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
         val subtitle = TextView(this).apply {
-            text = "自律行動と休憩リマインダー"
+            text = "自律行動とローカル会話"
             textSize = 15f
             gravity = Gravity.CENTER
             setPadding(0, dp(6), 0, dp(22))
@@ -102,81 +102,6 @@ class MainActivity : AppCompatActivity() {
         root.addView(petSelector, spinnerParams())
         root.addView(petSizeLabel, matchWrapParams())
         root.addView(petSizeSeekBar, matchWrapParams())
-
-        root.addView(sectionLabel("Break Reminder"), matchWrapParams())
-        root.addView(
-            switchRow(
-                label = "休憩リマインダー",
-                key = PetPreferences.KEY_BREAK_REMINDER_ENABLED,
-                defaultValue = PetPreferences.DEFAULT_BREAK_REMINDER_ENABLED,
-            ),
-            matchWrapParams(),
-        )
-        root.addView(settingLabel("提案する間隔"), matchWrapParams())
-        root.addView(
-            intSpinner(
-                values = listOf(15, 25, 30, 45, 60),
-                current = preferences.getInt(
-                    PetPreferences.KEY_BREAK_REMINDER_INTERVAL_MINUTES,
-                    PetPreferences.DEFAULT_BREAK_REMINDER_INTERVAL_MINUTES,
-                ),
-                suffix = "分",
-            ) { value ->
-                saveIntSetting(PetPreferences.KEY_BREAK_REMINDER_INTERVAL_MINUTES, value)
-            },
-            spinnerParams(),
-        )
-        root.addView(settingLabel("あとで通知"), matchWrapParams())
-        root.addView(
-            intSpinner(
-                values = listOf(5, 10, 15, 30),
-                current = preferences.getInt(
-                    PetPreferences.KEY_BREAK_REMINDER_SNOOZE_MINUTES,
-                    PetPreferences.DEFAULT_BREAK_REMINDER_SNOOZE_MINUTES,
-                ),
-                suffix = "分",
-            ) { value ->
-                saveIntSetting(PetPreferences.KEY_BREAK_REMINDER_SNOOZE_MINUTES, value)
-            },
-            spinnerParams(),
-        )
-        root.addView(
-            switchRow(
-                label = "静かにする時間帯",
-                key = PetPreferences.KEY_BREAK_REMINDER_QUIET_HOURS_ENABLED,
-                defaultValue = PetPreferences.DEFAULT_BREAK_REMINDER_QUIET_HOURS_ENABLED,
-            ),
-            matchWrapParams(),
-        )
-        root.addView(settingLabel("静かにする開始時刻"), matchWrapParams())
-        root.addView(
-            intSpinner(
-                values = (0..23).toList(),
-                current = preferences.getInt(
-                    PetPreferences.KEY_BREAK_REMINDER_QUIET_START_HOUR,
-                    PetPreferences.DEFAULT_BREAK_REMINDER_QUIET_START_HOUR,
-                ),
-                suffix = "時",
-            ) { value ->
-                saveIntSetting(PetPreferences.KEY_BREAK_REMINDER_QUIET_START_HOUR, value)
-            },
-            spinnerParams(),
-        )
-        root.addView(settingLabel("静かにする終了時刻"), matchWrapParams())
-        root.addView(
-            intSpinner(
-                values = (0..23).toList(),
-                current = preferences.getInt(
-                    PetPreferences.KEY_BREAK_REMINDER_QUIET_END_HOUR,
-                    PetPreferences.DEFAULT_BREAK_REMINDER_QUIET_END_HOUR,
-                ),
-                suffix = "時",
-            ) { value ->
-                saveIntSetting(PetPreferences.KEY_BREAK_REMINDER_QUIET_END_HOUR, value)
-            },
-            spinnerParams(),
-        )
-        root.addView(actionButton("テスト表示") { PetForegroundService.showTestReminder(this) }, buttonParams())
 
         root.addView(sectionLabel("Pet Behavior"), matchWrapParams())
         root.addView(
@@ -212,13 +137,22 @@ class MainActivity : AppCompatActivity() {
             },
             spinnerParams(),
         )
+        root.addView(sectionLabel("Conversation"), matchWrapParams())
+        root.addView(settingLabel("言語"), matchWrapParams())
         root.addView(
-            switchRow(
-                label = "休憩前に近づく",
-                key = PetPreferences.KEY_APPROACH_BEFORE_BREAK_ENABLED,
-                defaultValue = PetPreferences.DEFAULT_APPROACH_BEFORE_BREAK_ENABLED,
-            ),
-            matchWrapParams(),
+            stringSpinner(
+                entries = listOf(
+                    "ja" to "日本語",
+                    "en" to "English",
+                ),
+                current = preferences.getString(
+                    PetPreferences.KEY_CONVERSATION_LANGUAGE,
+                    PetPreferences.DEFAULT_CONVERSATION_LANGUAGE,
+                ) ?: PetPreferences.DEFAULT_CONVERSATION_LANGUAGE,
+            ) { value ->
+                saveStringSetting(PetPreferences.KEY_CONVERSATION_LANGUAGE, value)
+            },
+            spinnerParams(),
         )
 
         root.addView(sectionLabel("Permission / Service"), matchWrapParams())
@@ -353,37 +287,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun intSpinner(
-        values: List<Int>,
-        current: Int,
-        suffix: String,
-        onSelected: (Int) -> Unit,
-    ): Spinner {
-        val adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            values.map { "$it$suffix" },
-        ).apply {
-            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        }
-        return Spinner(this).apply {
-            this.adapter = adapter
-            setSelection(values.indexOf(current).takeIf { it >= 0 } ?: 0, false)
-            var initialized = false
-            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                    if (!initialized) {
-                        initialized = true
-                        return
-                    }
-                    onSelected(values[position])
-                }
-
-                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-            }
-        }
-    }
-
     private fun stringSpinner(
         entries: List<Pair<String, String>>,
         current: String,
@@ -412,11 +315,6 @@ class MainActivity : AppCompatActivity() {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             }
         }
-    }
-
-    private fun saveIntSetting(key: String, value: Int) {
-        preferences.edit().putInt(key, value).apply()
-        PetForegroundService.updateSettings(this)
     }
 
     private fun saveStringSetting(key: String, value: String) {

@@ -22,10 +22,6 @@ class PetBehaviorSettingsRepository(context: Context) {
                     PetPreferences.DEFAULT_AUTONOMOUS_BEHAVIOR_FREQUENCY,
                 ),
             ),
-            approachBeforeBreakEnabled = prefs.getBoolean(
-                PetPreferences.KEY_APPROACH_BEFORE_BREAK_ENABLED,
-                PetPreferences.DEFAULT_APPROACH_BEFORE_BREAK_ENABLED,
-            ),
         )
     }
 }

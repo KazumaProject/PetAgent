@@ -35,7 +35,8 @@
       "black crescent cheek markings",
       "short gray beak between eyes",
       "compact upright owl body",
-      "soft gray-brown feather streaks simplified for small overlay display"
+      "soft gray-brown feather streaks simplified for small overlay display",
+      "wing-assisted short flight between perch points"
     ],
     "avoid": [
       "human-like face",
@@ -48,8 +49,8 @@
   },
   "behaviorProfile": {
     "species": "african_scops_owl",
-    "movementPlane": "perch",
-    "defaultLocomotion": "perch_shift",
+    "movementPlane": "free_safe",
+    "defaultLocomotion": "short_flight",
     "idleBehaviors": ["idle", "blink", "look_left", "look_right", "sleep", "think"],
     "autonomousBehaviors": [
       {
@@ -60,17 +61,15 @@
       {
         "id": "owl_perch_shift",
         "animation": "land",
-        "minIntervalMs": 120000
+        "animationLeft": "fly_left",
+        "animationRight": "fly_right",
+        "minIntervalMs": 90000
       },
       {
         "id": "owl_sleep",
         "animation": "sleep",
         "minIntervalMs": 180000
       }
-    ],
-    "breakPreparation": {
-      "approachMode": "perch_shift",
-      "leadTimeMinutes": 2
-    }
+    ]
   }
 }

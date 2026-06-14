@@ -112,6 +112,42 @@
       "frameCount": 4,
       "fps": 10,
       "loop": false
+    },
+    "fly_left": {
+      "type": "spritesheet",
+      "file": "sprites/fly_left.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 12,
+      "loop": true
+    },
+    "fly_right": {
+      "type": "spritesheet",
+      "file": "sprites/fly_right.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 12,
+      "loop": true
+    },
+    "hop_left": {
+      "type": "spritesheet",
+      "file": "sprites/hop_left.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 10,
+      "loop": false
+    },
+    "hop_right": {
+      "type": "spritesheet",
+      "file": "sprites/hop_right.png",
+      "frameWidth": 512,
+      "frameHeight": 512,
+      "frameCount": 8,
+      "fps": 10,
+      "loop": false
     }
   },
   "fallbacks": {
@@ -123,6 +159,12 @@
     "drink": "happy",
     "refuse": "confused",
     "hungry": "confused",
-    "thirsty": "confused"
+    "thirsty": "confused",
+    "fly_left": "land",
+    "fly_right": "land",
+    "hop_left": "land",
+    "hop_right": "land",
+    "short_flight": "fly_right",
+    "hop": "hop_right"
   }
 }

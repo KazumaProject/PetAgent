@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Choreographer
+import com.kazumaproject.petagent.agent.AgentEvent
 import com.kazumaproject.petagent.behavior.BehaviorReason
 import com.kazumaproject.petagent.behavior.PetBehaviorIds
 import com.kazumaproject.petagent.behavior.PetBehaviorSettingsRepository
@@ -12,20 +13,19 @@ import com.kazumaproject.petagent.behavior.PetContext
 import com.kazumaproject.petagent.behavior.PetDecision
 import com.kazumaproject.petagent.behavior.PetSpecies
 import com.kazumaproject.petagent.behavior.SpeciesBehaviorProfile
-import com.kazumaproject.petagent.breakreminder.BreakReminderEngine
-import com.kazumaproject.petagent.breakreminder.BreakReminderRepository
-import com.kazumaproject.petagent.breakreminder.BreakReminderSettingsRepository
-import com.kazumaproject.petagent.breakreminder.BreakReminderTone
-import com.kazumaproject.petagent.breakreminder.BreakStatus
 import com.kazumaproject.petagent.data.behavior.PetBehaviorRepository
 import com.kazumaproject.petagent.data.memory.PetMemoryRepository
+import com.kazumaproject.petagent.llm.PetConversationEngine
 import com.kazumaproject.petagent.motion.MotionPlan
 import com.kazumaproject.petagent.motion.PetMotionController
 import com.kazumaproject.petagent.motion.PetMotionPlanner
 import com.kazumaproject.petagent.overlay.PetSpriteView
 import com.kazumaproject.petagent.petpack.PetPack
 import kotlin.math.min
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class PetRuntime(
@@ -34,13 +34,12 @@ class PetRuntime(
     private val behaviorProfile: SpeciesBehaviorProfile,
     private val petBrain: PetBrain,
     private val motionPlanner: PetMotionPlanner,
-    private val breakReminderEngine: BreakReminderEngine,
-    private val breakReminderRepository: BreakReminderRepository,
-    private val breakReminderSettingsRepository: BreakReminderSettingsRepository,
     private val petMemoryRepository: PetMemoryRepository,
     private val petBehaviorRepository: PetBehaviorRepository,
     private val petBehaviorSettingsRepository: PetBehaviorSettingsRepository,
     private val petMotionController: PetMotionController,
+    private val conversationEngine: PetConversationEngine,
+    private val conversationLanguageProvider: () -> String,
     private val coroutineScope: CoroutineScope,
     private val onStateChanged: (PetState) -> Unit = {},
     private val onUiRequest: (PetUiRequest) -> Unit = {},
@@ -53,6 +52,8 @@ class PetRuntime(
     private var brainThinking = false
     private var lastStepAtMs = 0L
     private var currentRequestedAnimationKey: String? = null
+    private var conversationJob: Job? = null
+    private var lastProactiveConversationAtMs = 0L
     private var state = PetState.initial(SystemClock.uptimeMillis())
 
     private val frameCallback = object : Choreographer.FrameCallback {
@@ -88,6 +89,9 @@ class PetRuntime(
         choreographer.removeFrameCallback(frameCallback)
         handler.removeCallbacks(brainTickRunnable)
         petMotionController.cancelAutonomousMotion()
+        conversationJob?.cancel()
+        conversationJob = null
+        conversationEngine.close()
     }
 
     fun onPetTapped() {
@@ -106,7 +110,7 @@ class PetRuntime(
                 fromY = petMotionController.currentPose().y,
             )
         }
-        onUiRequest(PetUiRequest.OpenBreakStatus)
+        onUiRequest(PetUiRequest.OpenPetPanel)
     }
 
     fun onDragStarted() {
@@ -121,81 +125,55 @@ class PetRuntime(
     fun onMinimizedChanged(minimized: Boolean) {
         if (minimized) {
             petMotionController.cancelAutonomousMotion()
+            conversationEngine.cancel()
+            conversationJob?.cancel()
         }
         dispatch(PetAction.MinimizedChanged(minimized, SystemClock.uptimeMillis()))
     }
 
-    suspend fun currentBreakStatus(): BreakStatus {
-        return breakReminderRepository.breakStatus(
-            petId = petId,
-            settings = breakReminderSettingsRepository.load(),
-            nowMs = System.currentTimeMillis(),
-        )
-    }
-
-    fun showTestBreakReminder() {
-        val settings = breakReminderSettingsRepository.load()
-        dispatch(PetAction.BreakReminderShown(SystemClock.uptimeMillis()))
-        onUiRequest(
-            PetUiRequest.ShowBreakReminder(
-                message = "そろそろ休憩しませんか？",
-                activeMinutes = settings.intervalMinutes,
-                tone = settings.tone,
-            ),
-        )
-    }
-
-    fun acceptBreak() {
-        val nowUptimeMs = SystemClock.uptimeMillis()
-        val nowWallClockMs = System.currentTimeMillis()
-        val settings = breakReminderSettingsRepository.load()
+    fun requestTalk() {
         coroutineScope.launch {
-            breakReminderRepository.acceptBreak(petId, settings, nowWallClockMs)
-            petMemoryRepository.incrementBreakAccepted(petId, speciesName, nowWallClockMs)
-            petBehaviorRepository.record(
-                petId = petId,
-                species = speciesName,
-                occurredAtMs = nowWallClockMs,
-                behaviorId = PetBehaviorIds.BREAK_ACCEPTED,
-                reason = BehaviorReason.BREAK_DUE,
-            )
-            dispatch(PetAction.BreakAccepted(nowUptimeMs))
+            if (conversationEngine.isReady()) {
+                onUiRequest(PetUiRequest.OpenConversationInput)
+            } else {
+                onUiRequest(PetUiRequest.RequestLocalModelSetup)
+            }
         }
     }
 
-    fun snoozeBreak() {
-        val nowUptimeMs = SystemClock.uptimeMillis()
-        val nowWallClockMs = System.currentTimeMillis()
-        val settings = breakReminderSettingsRepository.load()
-        coroutineScope.launch {
-            breakReminderRepository.snooze(petId, settings, nowWallClockMs)
-            petMemoryRepository.incrementSnooze(petId, speciesName, nowWallClockMs)
-            petBehaviorRepository.record(
-                petId = petId,
-                species = speciesName,
-                occurredAtMs = nowWallClockMs,
-                behaviorId = PetBehaviorIds.BREAK_SNOOZED,
-                reason = BehaviorReason.USER_DISMISSED,
-            )
-            dispatch(PetAction.BreakSnoozed(nowUptimeMs))
-        }
-    }
+    fun submitUserMessage(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return
 
-    fun dismissBreakToday() {
-        val nowUptimeMs = SystemClock.uptimeMillis()
-        val nowWallClockMs = System.currentTimeMillis()
-        val settings = breakReminderSettingsRepository.load()
-        coroutineScope.launch {
-            breakReminderRepository.dismissToday(petId, settings, nowWallClockMs)
-            petMemoryRepository.incrementDismiss(petId, speciesName, nowWallClockMs)
-            petBehaviorRepository.record(
-                petId = petId,
-                species = speciesName,
-                occurredAtMs = nowWallClockMs,
-                behaviorId = PetBehaviorIds.BREAK_DISMISSED,
-                reason = BehaviorReason.USER_DISMISSED,
-            )
-            dispatch(PetAction.BreakDismissed(nowUptimeMs))
+        conversationJob?.cancel()
+        conversationEngine.cancel()
+        petMotionController.cancelAutonomousMotion()
+        conversationJob = coroutineScope.launch {
+            if (!conversationEngine.isReady()) {
+                onUiRequest(PetUiRequest.RequestLocalModelSetup)
+                return@launch
+            }
+
+            dispatchAgentEvent(AgentEvent.ThinkingStarted)
+            val prompt = buildConversationPrompt(trimmed)
+            val result = conversationEngine.generate(prompt) { token ->
+                dispatchAgentEvent(AgentEvent.TokenReceived(token))
+            }
+
+            val error = result.exceptionOrNull()
+            when {
+                result.isSuccess -> dispatchAgentEvent(
+                    AgentEvent.ResponseCompleted(result.getOrNull().orEmpty()),
+                )
+                error is CancellationException -> Unit
+                else -> {
+                    val message = error?.message ?: "Local conversation failed."
+                    dispatchAgentEvent(AgentEvent.Error(message))
+                    if (message.isRecoverableModelSetupError()) {
+                        onUiRequest(PetUiRequest.RequestLocalModelSetup)
+                    }
+                }
+            }
         }
     }
 
@@ -230,7 +208,6 @@ class PetRuntime(
             petId = petId,
             speciesName = speciesName,
             world = petMotionController.currentWorld(behaviorProfile.species),
-            breakReminderSettings = breakReminderSettingsRepository.load(),
             behaviorSettings = petBehaviorSettingsRepository.load(),
             overlayVisible = snapshot.overlay.isVisible,
             isMinimized = snapshot.overlay.isMinimized || petMotionController.isMinimized(),
@@ -249,6 +226,52 @@ class PetRuntime(
             brainThinking = false
             if (running) {
                 handleDecision(decision)
+                if (decision == PetDecision.None) {
+                    maybeStartProactiveConversation(nowUptimeMs)
+                }
+            }
+        }
+    }
+
+    private fun maybeStartProactiveConversation(nowUptimeMs: Long) {
+        if (conversationJob?.isActive == true) return
+        if (state.agent is AgentState.Thinking || state.agent is AgentState.Speaking) return
+        if (state.interaction.isDragging || state.overlay.isMinimized || petMotionController.isDragging() || petMotionController.isMinimized()) return
+        if (nowUptimeMs - lastProactiveConversationAtMs < PROACTIVE_CONVERSATION_INTERVAL_MS) return
+
+        conversationJob = coroutineScope.launch {
+            if (!conversationEngine.isReady()) return@launch
+            lastProactiveConversationAtMs = SystemClock.uptimeMillis()
+
+            val plan = motionPlanner.planAutonomousMove(
+                profile = behaviorProfile,
+                pose = petMotionController.currentPose(),
+                world = petMotionController.currentWorld(behaviorProfile.species),
+                reason = BehaviorReason.AUTONOMOUS_WANDER,
+            )
+            if (plan != null && !state.interaction.isDragging && !state.overlay.isMinimized) {
+                startMotion(plan, recordBehavior = true)
+                delay(plan.durationMs.coerceAtMost(PROACTIVE_MOVE_WAIT_MAX_MS))
+            }
+            if (!running || state.interaction.isDragging || state.overlay.isMinimized) return@launch
+
+            dispatchAgentEvent(AgentEvent.ThinkingStarted)
+            val result = conversationEngine.generate(buildProactivePrompt()) { token ->
+                dispatchAgentEvent(AgentEvent.TokenReceived(token))
+            }
+            val error = result.exceptionOrNull()
+            when {
+                result.isSuccess -> dispatchAgentEvent(
+                    AgentEvent.ResponseCompleted(result.getOrNull().orEmpty()),
+                )
+                error is CancellationException -> Unit
+                else -> {
+                    val message = error?.message ?: "Local conversation failed."
+                    dispatchAgentEvent(AgentEvent.Error(message))
+                    if (message.isRecoverableModelSetupError()) {
+                        onUiRequest(PetUiRequest.RequestLocalModelSetup)
+                    }
+                }
             }
         }
     }
@@ -282,30 +305,7 @@ class PetRuntime(
                 }
             }
             is PetDecision.MoveTo -> startMotion(decision.plan, recordBehavior = true)
-            is PetDecision.PrepareBreakReminder -> {
-                dispatch(PetAction.ReminderProposalPrepared(nowUptimeMs))
-                decision.animationKey?.let { animationKey ->
-                    dispatch(
-                        PetAction.AutonomousAnimationStarted(
-                            animationKey = animationKey,
-                            durationMs = 1_200L,
-                            nowMs = nowUptimeMs,
-                        ),
-                    )
-                }
-                decision.plan?.let { startMotion(it, recordBehavior = false) }
-            }
-            is PetDecision.ShowBreakReminder -> {
-                dispatch(PetAction.BreakReminderShown(nowUptimeMs))
-                onUiRequest(
-                    PetUiRequest.ShowBreakReminder(
-                        message = decision.message,
-                        activeMinutes = decision.activeMinutes,
-                        tone = decision.tone,
-                    ),
-                )
-            }
-            PetDecision.ShowBreakStatusPanel -> onUiRequest(PetUiRequest.OpenBreakStatus)
+            PetDecision.ShowPetPanel -> onUiRequest(PetUiRequest.OpenPetPanel)
         }
     }
 
@@ -355,6 +355,54 @@ class PetRuntime(
         reduceOnly(action)
         lastStepAtMs = 0L
         renderImmediately()
+    }
+
+    private fun dispatchAgentEvent(event: AgentEvent) {
+        val action = PetAction.AgentEventReceived(event, SystemClock.uptimeMillis())
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            dispatch(action)
+        } else {
+            handler.post {
+                if (running) {
+                    dispatch(action)
+                }
+            }
+        }
+    }
+
+    private suspend fun buildConversationPrompt(userText: String): String {
+        val petDescription = petPack.manifest.description.take(MAX_PROMPT_DESCRIPTION_CHARS)
+        val languageInstruction = languageInstruction()
+        return """
+            You are the user's floating pet companion.
+            Pet display name: ${petPack.manifest.displayName}
+            Species/personality: $speciesName. $petDescription
+            Do not mention private data that was not provided here.
+            $languageInstruction
+            Keep the response compact and friendly.
+
+            User message:
+            $userText
+        """.trimIndent()
+    }
+
+    private fun buildProactivePrompt(): String {
+        val petDescription = petPack.manifest.description.take(MAX_PROMPT_DESCRIPTION_CHARS)
+        return """
+            You are the user's floating pet companion.
+            Pet display name: ${petPack.manifest.displayName}
+            Species/personality: $speciesName. $petDescription
+            ${languageInstruction()}
+            You just moved around on your own. Say one short, friendly, spontaneous line to the user.
+            Do not mention private data, schedules, or break reminders.
+        """.trimIndent()
+    }
+
+    private fun languageInstruction(): String {
+        return when (conversationLanguageProvider().lowercase()) {
+            "en" -> "Reply in English."
+            else -> "Reply in Japanese."
+        }
     }
 
     private fun reduceOnly(action: PetAction) {
@@ -420,18 +468,26 @@ class PetRuntime(
         return 1_000L / effectiveFps
     }
 
+    private fun String.isRecoverableModelSetupError(): Boolean {
+        return contains("Failed to invoke the compiled model", ignoreCase = true) ||
+            contains("Status Code: 13", ignoreCase = true) ||
+            contains("Selected local model has changed", ignoreCase = true) ||
+            contains("download", ignoreCase = true) ||
+            contains("checksum", ignoreCase = true) ||
+            contains("incomplete", ignoreCase = true)
+    }
+
     private companion object {
         const val FIRST_BRAIN_TICK_DELAY_MS = 1_000L
-        const val BRAIN_TICK_MS = 15_000L
+        const val BRAIN_TICK_MS = 5_000L
+        const val MAX_PROMPT_DESCRIPTION_CHARS = 260
+        const val PROACTIVE_CONVERSATION_INTERVAL_MS = 90_000L
+        const val PROACTIVE_MOVE_WAIT_MAX_MS = 4_500L
     }
 }
 
 sealed interface PetUiRequest {
-    data object OpenBreakStatus : PetUiRequest
-
-    data class ShowBreakReminder(
-        val message: String,
-        val activeMinutes: Int,
-        val tone: BreakReminderTone,
-    ) : PetUiRequest
+    data object OpenPetPanel : PetUiRequest
+    data object OpenConversationInput : PetUiRequest
+    data object RequestLocalModelSetup : PetUiRequest
 }

@@ -47,6 +47,11 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.kotlinx.coroutines.android)
+    runtimeOnly(libs.kotlin.reflect)
+    runtimeOnly(libs.litertlm.android) {
+        exclude(group = "org.jetbrains.kotlin")
+    }
     ksp(libs.androidx.room.compiler)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
