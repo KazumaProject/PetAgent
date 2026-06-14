@@ -19,6 +19,7 @@ class PetOverlayController(
     private val service: Service,
     private val petPack: PetPack,
     private val listener: Listener,
+    initialSizeDp: Int = petPack.manifest.defaultSizeDp,
 ) {
     interface Listener {
         fun onPetTapped()
@@ -30,7 +31,8 @@ class PetOverlayController(
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
     private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
-    private val sizePx = dp(petPack.manifest.defaultSizeDp)
+    private var sizeDp = initialSizeDp.coerceIn(petPack.manifest.minSizeDp, petPack.manifest.maxSizeDp)
+    private var sizePx = dp(sizeDp)
     private var petView: PetSpriteView? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var downRawX = 0f
@@ -87,6 +89,36 @@ class PetOverlayController(
     fun toggleMinimized() {
         setMinimized(!isMinimized)
     }
+
+    fun updateSize(sizeDp: Int) {
+        val clampedSizeDp = sizeDp.coerceIn(petPack.manifest.minSizeDp, petPack.manifest.maxSizeDp)
+        val newSizePx = dp(clampedSizeDp)
+        if (newSizePx == this.sizePx) return
+
+        this.sizeDp = clampedSizeDp
+        this.sizePx = newSizePx
+
+        val params = layoutParams ?: return
+        params.width = newSizePx
+        params.height = newSizePx
+
+        val metrics = service.resources.displayMetrics
+        if (isMinimized) {
+            val visibleStrip = max(dp(22), newSizePx / 3)
+            params.x = if (params.x < metrics.widthPixels / 2) {
+                -(newSizePx - visibleStrip)
+            } else {
+                metrics.widthPixels - visibleStrip
+            }
+        } else {
+            params.x = params.x.coerceIn(0, (metrics.widthPixels - newSizePx).coerceAtLeast(0))
+        }
+        params.y = params.y.coerceIn(0, (metrics.heightPixels - newSizePx).coerceAtLeast(0))
+
+        updateLayout()
+    }
+
+    fun getPetId(): String = petPack.manifest.petId
 
     fun setMinimized(minimized: Boolean) {
         val params = layoutParams ?: return

@@ -25,7 +25,7 @@ class StubAgentCore(
 
         if (requestCount % ERROR_EVERY_N_REQUESTS == 0) {
             postForRequest(requestId, delayMs = 850L) {
-                listener(AgentEvent.Error("The little owl lost that thought."))
+                listener(AgentEvent.Error("The little pet lost that thought."))
             }
             return
         }

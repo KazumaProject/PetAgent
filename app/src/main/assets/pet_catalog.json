@@ -1,0 +1,17 @@
+{
+  "formatVersion": 1,
+  "pets": [
+    {
+      "petId": "default_african_scops_owl",
+      "basePath": "default_african_scops_owl",
+      "displayName": "African Scops Owl",
+      "preview": "default_african_scops_owl/preview.png"
+    },
+    {
+      "petId": "default_panda",
+      "basePath": "default_panda",
+      "displayName": "Panda",
+      "preview": "default_panda/preview.png"
+    }
+  ]
+}

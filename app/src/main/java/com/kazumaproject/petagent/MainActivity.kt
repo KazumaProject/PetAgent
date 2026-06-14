@@ -10,12 +10,20 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.kazumaproject.petagent.petpack.PetCatalogEntry
+import com.kazumaproject.petagent.petpack.PetCatalogLoader
+import com.kazumaproject.petagent.petpack.PetPack
+import com.kazumaproject.petagent.petpack.PetPackLoader
 import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
@@ -24,9 +32,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlayButton: Button
     private lateinit var notificationButton: Button
     private lateinit var startButton: Button
+    private lateinit var petSelector: Spinner
+    private lateinit var petSizeLabel: TextView
+    private lateinit var petSizeSeekBar: SeekBar
+    private val preferences by lazy { PetPreferences.prefs(this) }
+    private var catalogPets: List<PetCatalogEntry> = emptyList()
+    private var selectedPetPack: PetPack? = null
+    private var suppressSizeCallback = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        catalogPets = PetCatalogLoader(this).load().pets
         title = getString(R.string.app_name)
         setContentView(buildContentView())
     }
@@ -56,7 +72,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "African Scops Owl"
+            text = "Floating Pet"
             textSize = 26f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -70,6 +86,9 @@ class MainActivity : AppCompatActivity() {
 
         overlayStatus = statusText()
         notificationStatus = statusText()
+        petSizeLabel = statusText()
+        petSizeSeekBar = buildSizeSeekBar()
+        petSelector = buildPetSelector()
 
         overlayButton = actionButton("Open Overlay Settings") {
             openOverlaySettings()
@@ -77,15 +96,19 @@ class MainActivity : AppCompatActivity() {
         notificationButton = actionButton("Allow Notifications") {
             requestNotificationPermission()
         }
-        startButton = actionButton("Start Owl") {
+        startButton = actionButton("Start Pet") {
             startPetIfReady()
         }
-        val stopButton = actionButton("Stop Owl") {
+        val stopButton = actionButton("Stop Pet") {
             PetForegroundService.stop(this)
         }
 
         root.addView(title, matchWrapParams())
         root.addView(subtitle, matchWrapParams())
+        root.addView(sectionLabel("Pet"), matchWrapParams())
+        root.addView(petSelector, spinnerParams())
+        root.addView(petSizeLabel, matchWrapParams())
+        root.addView(petSizeSeekBar, matchWrapParams())
         root.addView(overlayStatus, matchWrapParams())
         root.addView(notificationStatus, matchWrapParams())
         root.addView(overlayButton, buttonParams())
@@ -93,7 +116,148 @@ class MainActivity : AppCompatActivity() {
         root.addView(startButton, buttonParams())
         root.addView(stopButton, buttonParams())
         scrollView.addView(root)
+
+        bindSelectedPet(catalogPets[selectedPetIndex()], notifyService = false, saveSelection = false)
+        attachPetSelectorListener()
         return scrollView
+    }
+
+    private fun buildPetSelector(): Spinner {
+        val adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            catalogPets.map { it.displayName },
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+
+        return Spinner(this).apply {
+            this.adapter = adapter
+            setSelection(selectedPetIndex(), false)
+        }
+    }
+
+    private fun attachPetSelectorListener() {
+        petSelector.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(
+                parent: AdapterView<*>?,
+                view: View?,
+                position: Int,
+                id: Long,
+            ) {
+                val entry = catalogPets[position]
+                if (isCurrentPersistedSelection(entry) && selectedPetPack?.manifest?.petId == entry.petId) {
+                    return
+                }
+
+                bindSelectedPet(entry, notifyService = true, saveSelection = true)
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+        }
+    }
+
+    private fun isCurrentPersistedSelection(entry: PetCatalogEntry): Boolean {
+        val selectedPetId = preferences.getString(
+            PetPreferences.KEY_SELECTED_PET_ID,
+            PetPreferences.DEFAULT_PET_ID,
+        ) ?: PetPreferences.DEFAULT_PET_ID
+        val selectedBasePath = preferences.getString(
+            PetPreferences.KEY_SELECTED_PET_BASE_PATH,
+            PetPreferences.DEFAULT_PET_BASE_PATH,
+        ) ?: PetPreferences.DEFAULT_PET_BASE_PATH
+
+        return entry.petId == selectedPetId && entry.basePath == selectedBasePath
+    }
+
+    private fun buildSizeSeekBar(): SeekBar {
+        return SeekBar(this).apply {
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    val petPack = selectedPetPack ?: return
+                    val sizeDp = petPack.manifest.minSizeDp + progress
+                    petSizeLabel.text = "Size: $sizeDp dp"
+                    if (fromUser && !suppressSizeCallback) {
+                        savePetSize(petPack, sizeDp)
+                        PetForegroundService.updateSettings(this@MainActivity)
+                    }
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+    }
+
+    private fun bindSelectedPet(
+        entry: PetCatalogEntry,
+        notifyService: Boolean,
+        saveSelection: Boolean,
+    ) {
+        val petPack = PetPackLoader(this, entry.basePath).load()
+        selectedPetPack = petPack
+
+        if (saveSelection) {
+            preferences.edit()
+                .putString(PetPreferences.KEY_SELECTED_PET_ID, entry.petId)
+                .putString(PetPreferences.KEY_SELECTED_PET_BASE_PATH, entry.basePath)
+                .apply()
+        }
+
+        bindPetSize(petPack)
+
+        if (notifyService) {
+            PetForegroundService.updateSettings(this)
+        }
+    }
+
+    private fun bindPetSize(petPack: PetPack) {
+        val manifest = petPack.manifest
+        val savedSizeDp = savedPetSize(petPack)
+        suppressSizeCallback = true
+        petSizeSeekBar.max = (manifest.maxSizeDp - manifest.minSizeDp).coerceAtLeast(0)
+        petSizeSeekBar.progress = savedSizeDp - manifest.minSizeDp
+        petSizeSeekBar.isEnabled = manifest.maxSizeDp > manifest.minSizeDp
+        petSizeLabel.text = "Size: $savedSizeDp dp"
+        suppressSizeCallback = false
+    }
+
+    private fun selectedPetIndex(): Int {
+        val selectedPetId = preferences.getString(
+            PetPreferences.KEY_SELECTED_PET_ID,
+            PetPreferences.DEFAULT_PET_ID,
+        ) ?: PetPreferences.DEFAULT_PET_ID
+        val selectedBasePath = preferences.getString(
+            PetPreferences.KEY_SELECTED_PET_BASE_PATH,
+            PetPreferences.DEFAULT_PET_BASE_PATH,
+        ) ?: PetPreferences.DEFAULT_PET_BASE_PATH
+
+        return catalogPets.indexOfFirst { it.petId == selectedPetId }
+            .takeIf { it >= 0 }
+            ?: catalogPets.indexOfFirst { it.basePath == selectedBasePath }
+                .takeIf { it >= 0 }
+            ?: catalogPets.indexOfFirst { it.petId == PetPreferences.DEFAULT_PET_ID }
+                .takeIf { it >= 0 }
+            ?: 0
+    }
+
+    private fun savedPetSize(petPack: PetPack): Int {
+        val manifest = petPack.manifest
+        return preferences.getInt(
+            PetPreferences.petSizeKey(manifest.petId),
+            manifest.defaultSizeDp,
+        ).coerceIn(manifest.minSizeDp, manifest.maxSizeDp)
+    }
+
+    private fun savePetSize(petPack: PetPack, sizeDp: Int) {
+        val manifest = petPack.manifest
+        preferences.edit()
+            .putInt(
+                PetPreferences.petSizeKey(manifest.petId),
+                sizeDp.coerceIn(manifest.minSizeDp, manifest.maxSizeDp),
+            )
+            .apply()
     }
 
     private fun startPetIfReady() {
@@ -146,6 +310,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun sectionLabel(label: String): TextView {
+        return TextView(this).apply {
+            text = label
+            textSize = 17f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(18), 0, dp(4))
+        }
+    }
+
     private fun actionButton(label: String, onClick: () -> Unit): Button {
         return Button(this).apply {
             text = label
@@ -167,6 +340,15 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams.WRAP_CONTENT,
         ).apply {
             topMargin = dp(10)
+        }
+    }
+
+    private fun spinnerParams(): LinearLayout.LayoutParams {
+        return LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+            bottomMargin = dp(8)
         }
     }
 

@@ -13,18 +13,19 @@ class PetPackLoader(
         val manifestJson = JSONObject(readAssetText("$basePath/manifest.json"))
         val animationsJson = JSONObject(readAssetText("$basePath/animations.json"))
         val manifest = parseManifest(manifestJson)
-        val frameSize = animationsJson.optJSONObject("frameSize")?.let {
+        val declaredFrameSize = animationsJson.optJSONObject("frameSize")?.let {
             FrameSize(
                 width = it.optInt("width", 1).coerceAtLeast(1),
                 height = it.optInt("height", 1).coerceAtLeast(1),
             )
-        } ?: FrameSize(width = 1, height = 1)
+        }
 
         val parsedAnimations = linkedMapOf<String, SpriteAnimation>()
-        val animationContainer = animationsJson.optJSONObject("animations") ?: JSONObject()
+        val animationContainer = animationsJson.optJSONObject("animations") ?: animationsJson
         val keys = animationContainer.keys()
         while (keys.hasNext()) {
             val key = keys.next()
+            if (key in NON_ANIMATION_KEYS) continue
             val animationJson = animationContainer.optJSONObject(key) ?: continue
             val animation = parseAnimation(key, animationJson) ?: continue
             val assetPath = "$basePath/${animation.file}"
@@ -38,6 +39,10 @@ class PetPackLoader(
         if (!parsedAnimations.containsKey("idle")) {
             Log.w(TAG, "PetPack has no valid idle animation; renderer will use the first valid animation if available.")
         }
+
+        val frameSize = declaredFrameSize ?: parsedAnimations.values.firstOrNull()?.let {
+            FrameSize(width = it.frameWidth, height = it.frameHeight)
+        } ?: FrameSize(width = 1, height = 1)
 
         return PetPack(
             basePath = basePath,
@@ -75,7 +80,7 @@ class PetPackLoader(
 
     private fun parseAnimation(key: String, json: JSONObject): SpriteAnimation? {
         val type = json.optString("type", "spritesheet")
-        val file = json.optString("file")
+        val file = json.optString("file", json.optString("sprite"))
         val frameWidth = json.optInt("frameWidth", 0)
         val frameHeight = json.optInt("frameHeight", 0)
         val frameCount = json.optInt("frameCount", 0)
@@ -125,5 +130,6 @@ class PetPackLoader(
 
     private companion object {
         const val TAG = "PetPackLoader"
+        val NON_ANIMATION_KEYS = setOf("formatVersion", "frameSize", "animations", "fallbacks")
     }
 }

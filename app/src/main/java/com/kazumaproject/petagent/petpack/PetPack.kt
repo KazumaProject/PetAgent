@@ -1,5 +1,7 @@
 package com.kazumaproject.petagent.petpack
 
+import android.util.Log
+
 data class PetPack(
     val basePath: String,
     val manifest: PetManifest,
@@ -10,15 +12,36 @@ data class PetPack(
     fun resolveAnimation(requestedKey: String): SpriteAnimation? {
         animations[requestedKey]?.let { return it }
 
-        val fallbackKey = fallbacks[requestedKey] ?: when (requestedKey) {
+        val candidateKeys = listOfNotNull(
+            fallbacks[requestedKey],
+            builtInFallback(requestedKey),
+            IDLE_ANIMATION,
+        ).distinct()
+
+        candidateKeys.forEach { key ->
+            animations[key]?.let { return it }
+        }
+
+        animations.values.firstOrNull()?.let { return it }
+
+        Log.e(TAG, "Unable to resolve animation '$requestedKey'; pet '${manifest.petId}' has no available animations.")
+        return null
+    }
+
+    private fun builtInFallback(requestedKey: String): String? {
+        return when (requestedKey) {
             "talk" -> "speak"
             "question" -> "think"
             "error" -> "confused"
             "wake_up" -> "blink"
-            else -> "idle"
+            "minimized" -> "peek"
+            else -> null
         }
+    }
 
-        return animations[fallbackKey] ?: animations["idle"] ?: animations.values.firstOrNull()
+    private companion object {
+        const val TAG = "PetPack"
+        const val IDLE_ANIMATION = "idle"
     }
 }
 

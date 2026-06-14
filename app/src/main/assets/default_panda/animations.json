@@ -1,0 +1,131 @@
+{
+  "idle": {
+    "sprite": "sprites/idle.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 12,
+    "fps": 8,
+    "loop": true
+  },
+  "blink": {
+    "sprite": "sprites/blink.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 6,
+    "fps": 10,
+    "loop": false
+  },
+  "sleep": {
+    "sprite": "sprites/sleep.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 12,
+    "fps": 4,
+    "loop": true
+  },
+  "wake_up": {
+    "sprite": "sprites/wake_up.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 10,
+    "fps": 8,
+    "loop": false
+  },
+  "walk_left": {
+    "sprite": "sprites/walk_left.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 12,
+    "fps": 10,
+    "loop": true
+  },
+  "walk_right": {
+    "sprite": "sprites/walk_right.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 12,
+    "fps": 10,
+    "loop": true
+  },
+  "sit": {
+    "sprite": "sprites/sit.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 8,
+    "fps": 8,
+    "loop": false
+  },
+  "eat": {
+    "sprite": "sprites/eat.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 12,
+    "fps": 8,
+    "loop": true
+  },
+  "happy": {
+    "sprite": "sprites/happy.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 10,
+    "fps": 10,
+    "loop": false
+  },
+  "confused": {
+    "sprite": "sprites/confused.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 8,
+    "fps": 8,
+    "loop": false
+  },
+  "dragged": {
+    "sprite": "sprites/dragged.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 4,
+    "fps": 8,
+    "loop": true
+  },
+  "peek": {
+    "sprite": "sprites/peek.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 6,
+    "fps": 8,
+    "loop": true
+  },
+  "look_left": {
+    "sprite": "sprites/look_left.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 6,
+    "fps": 8,
+    "loop": false
+  },
+  "look_right": {
+    "sprite": "sprites/look_right.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 6,
+    "fps": 8,
+    "loop": false
+  },
+  "restore": {
+    "sprite": "sprites/restore.png",
+    "frameWidth": 256,
+    "frameHeight": 256,
+    "frameCount": 8,
+    "fps": 10,
+    "loop": false
+  },
+  "fallbacks": {
+    "talk": "happy",
+    "speak": "happy",
+    "think": "confused",
+    "question": "confused",
+    "error": "confused",
+    "land": "restore",
+    "minimized": "peek"
+  }
+}

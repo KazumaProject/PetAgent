@@ -1,0 +1,42 @@
+{
+  "formatVersion": 1,
+  "petId": "default_panda",
+  "displayName": "Panda",
+  "species": "panda",
+  "defaultSizeDp": 88,
+  "minSizeDp": 64,
+  "maxSizeDp": 160,
+  "defaultAnimation": "idle",
+  "preview": "preview.png",
+  "activityProfile": {
+    "type": "diurnal",
+    "sleepWindows": [
+      {
+        "start": "22:00",
+        "end": "07:00"
+      }
+    ],
+    "activeWindows": [
+      {
+        "start": "08:00",
+        "end": "20:00"
+      }
+    ],
+    "softTransitionMinutes": 45
+  },
+  "locomotion": {
+    "canWalk": true,
+    "canHop": false,
+    "canFly": false,
+    "preferredModes": [
+      "idle",
+      "walk_left",
+      "walk_right",
+      "sit",
+      "eat",
+      "happy",
+      "look_left",
+      "look_right"
+    ]
+  }
+}
