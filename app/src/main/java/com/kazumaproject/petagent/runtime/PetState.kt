@@ -101,6 +101,10 @@ sealed interface PetAction {
     data class MinimizedChanged(val minimized: Boolean, val nowMs: Long) : PetAction
     data class AnimationFinished(val animationKey: String, val nowMs: Long) : PetAction
     data class AgentEventReceived(val event: AgentEvent, val nowMs: Long) : PetAction
+    data class CareReactionReceived(
+        val animationKey: String,
+        val nowMs: Long,
+    ) : PetAction
 }
 
 const val FIRST_BLINK_DELAY_MS = 2_500L

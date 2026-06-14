@@ -20,6 +20,10 @@ import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.kazumaproject.petagent.game.PetCareAction
+import com.kazumaproject.petagent.game.PetCareEngine
+import com.kazumaproject.petagent.game.PetCareRepository
+import com.kazumaproject.petagent.game.toUiState
 import com.kazumaproject.petagent.petpack.PetCatalogEntry
 import com.kazumaproject.petagent.petpack.PetCatalogLoader
 import com.kazumaproject.petagent.petpack.PetPack
@@ -35,7 +39,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var petSelector: Spinner
     private lateinit var petSizeLabel: TextView
     private lateinit var petSizeSeekBar: SeekBar
+    private lateinit var careStatusText: TextView
     private val preferences by lazy { PetPreferences.prefs(this) }
+    private val careRepository by lazy { PetCareRepository(this) }
     private var catalogPets: List<PetCatalogEntry> = emptyList()
     private var selectedPetPack: PetPack? = null
     private var suppressSizeCallback = false
@@ -50,6 +56,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updatePermissionState()
+        selectedPetPack?.let { updateCareStatus(it) }
     }
 
     override fun onRequestPermissionsResult(
@@ -89,6 +96,7 @@ class MainActivity : AppCompatActivity() {
         petSizeLabel = statusText()
         petSizeSeekBar = buildSizeSeekBar()
         petSelector = buildPetSelector()
+        careStatusText = statusText()
 
         overlayButton = actionButton("Open Overlay Settings") {
             openOverlaySettings()
@@ -109,6 +117,8 @@ class MainActivity : AppCompatActivity() {
         root.addView(petSelector, spinnerParams())
         root.addView(petSizeLabel, matchWrapParams())
         root.addView(petSizeSeekBar, matchWrapParams())
+        root.addView(sectionLabel("Pet Care Status"), matchWrapParams())
+        root.addView(careStatusText, matchWrapParams())
         root.addView(overlayStatus, matchWrapParams())
         root.addView(notificationStatus, matchWrapParams())
         root.addView(overlayButton, buttonParams())
@@ -206,9 +216,31 @@ class MainActivity : AppCompatActivity() {
         }
 
         bindPetSize(petPack)
+        updateCareStatus(petPack)
 
         if (notifyService) {
             PetForegroundService.updateSettings(this)
+        }
+    }
+
+    private fun updateCareStatus(petPack: PetPack) {
+        val manifest = petPack.manifest
+        val nowWallClockMs = System.currentTimeMillis()
+        val result = PetCareEngine.reduce(
+            state = careRepository.load(manifest.petId, nowWallClockMs),
+            action = PetCareAction.TimePassed(nowWallClockMs),
+            species = manifest.species,
+        )
+        careRepository.save(result.state)
+        val uiState = result.state.toUiState()
+
+        careStatusText.text = buildString {
+            appendLine("Fullness: ${uiState.fullness}")
+            appendLine("Hydration: ${uiState.hydration}")
+            appendLine("Happiness: ${uiState.happiness}")
+            appendLine("Affection: ${uiState.affection}")
+            appendLine("Level: ${uiState.level}")
+            append("世話はペットをタップして行えます")
         }
     }
 

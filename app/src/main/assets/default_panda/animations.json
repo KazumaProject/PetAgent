@@ -126,6 +126,10 @@
     "question": "confused",
     "error": "confused",
     "land": "restore",
-    "minimized": "peek"
+    "minimized": "peek",
+    "drink": "happy",
+    "refuse": "confused",
+    "hungry": "confused",
+    "thirsty": "confused"
   }
 }

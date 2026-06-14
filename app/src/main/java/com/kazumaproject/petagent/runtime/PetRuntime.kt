@@ -6,13 +6,23 @@ import android.os.SystemClock
 import android.view.Choreographer
 import com.kazumaproject.petagent.agent.AgentEvent
 import com.kazumaproject.petagent.agent.StubAgentCore
+import com.kazumaproject.petagent.game.PetCareAction
+import com.kazumaproject.petagent.game.PetCareEngine
+import com.kazumaproject.petagent.game.PetCareRepository
+import com.kazumaproject.petagent.game.PetCareState
+import com.kazumaproject.petagent.game.PetCareUiState
+import com.kazumaproject.petagent.game.toUiState
 import com.kazumaproject.petagent.overlay.PetSpriteView
 import kotlin.math.min
 
 class PetRuntime(
     private val petView: PetSpriteView,
     private val agentCore: StubAgentCore,
+    private val petId: String,
+    private val species: String,
+    private val careRepository: PetCareRepository,
     private val onStateChanged: (PetState) -> Unit = {},
+    private val onCareUiStateChanged: (PetCareUiState) -> Unit = {},
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val choreographer = Choreographer.getInstance()
@@ -21,6 +31,8 @@ class PetRuntime(
     private var currentRequestedAnimationKey: String? = null
     private var pendingAgentStart: Runnable? = null
     private var state = PetState.initial(SystemClock.uptimeMillis())
+    private var careState: PetCareState? = null
+    private var lastCareTickWallClockMs: Long = 0L
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -33,6 +45,7 @@ class PetRuntime(
     fun start() {
         if (running) return
         running = true
+        initializeCareState()
         renderImmediately()
         choreographer.postFrameCallback(frameCallback)
     }
@@ -77,6 +90,34 @@ class PetRuntime(
         dispatch(PetAction.MinimizedChanged(minimized, SystemClock.uptimeMillis()))
     }
 
+    fun giveFood(foodId: String) {
+        reduceCareAction(
+            actionFactory = { nowWallClockMs -> PetCareAction.GiveFood(foodId, nowWallClockMs) },
+            sendReaction = true,
+        )
+    }
+
+    fun giveWater() {
+        reduceCareAction(
+            actionFactory = { nowWallClockMs -> PetCareAction.GiveWater(nowWallClockMs) },
+            sendReaction = true,
+        )
+    }
+
+    fun play() {
+        reduceCareAction(
+            actionFactory = { nowWallClockMs -> PetCareAction.Play(nowWallClockMs) },
+            sendReaction = true,
+        )
+    }
+
+    fun refreshCareState() {
+        reduceCareAction(
+            actionFactory = { nowWallClockMs -> PetCareAction.TimePassed(nowWallClockMs) },
+            sendReaction = false,
+        )
+    }
+
     private fun onAgentEvent(event: AgentEvent) {
         dispatch(PetAction.AgentEventReceived(event, SystemClock.uptimeMillis()))
     }
@@ -98,6 +139,51 @@ class PetRuntime(
             applyAnimation(frameTimeNanos)
             petView.advance(frameTimeNanos)
         }
+        maybeRefreshCareState()
+    }
+
+    private fun initializeCareState() {
+        val nowWallClockMs = System.currentTimeMillis()
+        val loadedState = careRepository.load(petId, nowWallClockMs)
+        val result = PetCareEngine.reduce(
+            state = loadedState,
+            action = PetCareAction.TimePassed(nowWallClockMs),
+            species = species,
+        )
+        careRepository.save(result.state)
+        careState = result.state
+        lastCareTickWallClockMs = nowWallClockMs
+        onCareUiStateChanged(result.state.toUiState())
+    }
+
+    private fun maybeRefreshCareState() {
+        val nowWallClockMs = System.currentTimeMillis()
+        if (lastCareTickWallClockMs != 0L && nowWallClockMs - lastCareTickWallClockMs < CARE_TICK_MS) {
+            return
+        }
+        refreshCareState()
+    }
+
+    private fun reduceCareAction(
+        actionFactory: (Long) -> PetCareAction,
+        sendReaction: Boolean,
+    ) {
+        val nowWallClockMs = System.currentTimeMillis()
+        val nowUptimeMs = SystemClock.uptimeMillis()
+        val currentState = careState ?: careRepository.load(petId, nowWallClockMs)
+        val result = PetCareEngine.reduce(
+            state = currentState,
+            action = actionFactory(nowWallClockMs),
+            species = species,
+        )
+        careRepository.save(result.state)
+        careState = result.state
+        lastCareTickWallClockMs = nowWallClockMs
+
+        if (sendReaction) {
+            dispatch(PetAction.CareReactionReceived(result.reaction.animationKey, nowUptimeMs))
+        }
+        onCareUiStateChanged(result.state.toUiState())
     }
 
     private fun dispatch(action: PetAction) {
@@ -142,5 +228,6 @@ class PetRuntime(
 
     private companion object {
         const val TAP_LOOK_REACTION_MS = 430L
+        const val CARE_TICK_MS = 30_000L
     }
 }

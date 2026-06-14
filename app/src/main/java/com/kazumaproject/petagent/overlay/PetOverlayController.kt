@@ -2,6 +2,7 @@ package com.kazumaproject.petagent.overlay
 
 import android.app.Service
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -22,10 +23,11 @@ class PetOverlayController(
     initialSizeDp: Int = petPack.manifest.defaultSizeDp,
 ) {
     interface Listener {
-        fun onPetTapped()
-        fun onDragStarted()
-        fun onDragEnded()
-        fun onMinimizedChanged(minimized: Boolean)
+        fun onPetTapped(petBounds: Rect)
+        fun onDragStarted(petBounds: Rect)
+        fun onPetMoved(petBounds: Rect)
+        fun onDragEnded(petBounds: Rect)
+        fun onMinimizedChanged(minimized: Boolean, petBounds: Rect)
     }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
@@ -116,9 +118,15 @@ class PetOverlayController(
         params.y = params.y.coerceIn(0, (metrics.heightPixels - newSizePx).coerceAtLeast(0))
 
         updateLayout()
+        listener.onPetMoved(params.toPetBounds())
     }
 
     fun getPetId(): String = petPack.manifest.petId
+
+    fun currentPetBounds(): Rect? {
+        val params = layoutParams ?: return null
+        return params.toPetBounds()
+    }
 
     fun setMinimized(minimized: Boolean) {
         val params = layoutParams ?: return
@@ -143,7 +151,7 @@ class PetOverlayController(
         }
 
         updateLayout()
-        listener.onMinimizedChanged(minimized)
+        listener.onMinimizedChanged(minimized, params.toPetBounds())
     }
 
     private fun handleTouch(event: MotionEvent): Boolean {
@@ -168,25 +176,26 @@ class PetOverlayController(
                         setMinimized(false)
                     }
                     dragging = true
-                    listener.onDragStarted()
+                    listener.onDragStarted(params.toPetBounds())
                 }
                 if (dragging) {
                     val metrics = service.resources.displayMetrics
                     params.x = (startX + dx.roundToInt()).coerceIn(0, (metrics.widthPixels - sizePx).coerceAtLeast(0))
                     params.y = (startY + dy.roundToInt()).coerceIn(0, (metrics.heightPixels - sizePx).coerceAtLeast(0))
                     updateLayout()
+                    listener.onPetMoved(params.toPetBounds())
                 }
                 return true
             }
             MotionEvent.ACTION_UP -> {
                 handler.removeCallbacks(longPressRunnable)
                 if (dragging) {
-                    listener.onDragEnded()
+                    listener.onDragEnded(params.toPetBounds())
                 } else if (!longPressConsumed) {
                     if (isMinimized) {
                         setMinimized(false)
                     } else {
-                        listener.onPetTapped()
+                        listener.onPetTapped(params.toPetBounds())
                     }
                 }
                 dragging = false
@@ -195,7 +204,7 @@ class PetOverlayController(
             MotionEvent.ACTION_CANCEL -> {
                 handler.removeCallbacks(longPressRunnable)
                 if (dragging) {
-                    listener.onDragEnded()
+                    listener.onDragEnded(params.toPetBounds())
                 }
                 dragging = false
                 return true
@@ -232,5 +241,9 @@ class PetOverlayController(
 
     private fun dp(value: Int): Int {
         return (value * service.resources.displayMetrics.density).roundToInt()
+    }
+
+    private fun WindowManager.LayoutParams.toPetBounds(): Rect {
+        return Rect(x, y, x + width, y + height)
     }
 }

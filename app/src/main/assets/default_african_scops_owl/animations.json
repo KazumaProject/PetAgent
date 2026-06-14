@@ -118,6 +118,11 @@
     "error": "confused",
     "wake_up": "blink",
     "talk": "speak",
-    "question": "think"
+    "question": "think",
+    "eat": "happy",
+    "drink": "happy",
+    "refuse": "confused",
+    "hungry": "confused",
+    "thirsty": "confused"
   }
 }

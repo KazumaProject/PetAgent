@@ -26,6 +26,11 @@ object PetReducer {
             )
             is PetAction.AnimationFinished -> onAnimationFinished(state, action.animationKey, action.nowMs)
             is PetAction.AgentEventReceived -> onAgentEvent(state, action.event, action.nowMs)
+            is PetAction.CareReactionReceived -> onCareReaction(
+                state = state,
+                animationKey = action.animationKey,
+                nowMs = action.nowMs,
+            )
         }
     }
 
@@ -139,6 +144,33 @@ object PetReducer {
                 emotion = state.emotion.copy(mood = PetMood.Confused, attention = PetAttention.Forward),
             )
         }
+    }
+
+    private fun onCareReaction(state: PetState, animationKey: String, nowMs: Long): PetState {
+        val mood = when (animationKey) {
+            "eat",
+            "happy" -> PetMood.Happy
+            "drink" -> PetMood.Calm
+            "confused" -> PetMood.Confused
+            "sleep" -> PetMood.Sleepy
+            else -> state.emotion.mood
+        }
+        val durationMs = when (animationKey) {
+            "eat" -> 1_800L
+            "drink" -> 1_500L
+            "happy" -> 1_300L
+            "confused" -> 1_200L
+            "sleep" -> 2_000L
+            else -> 1_200L
+        }
+
+        return state.copy(
+            body = state.body.withTransient(animationKey, nowMs, durationMs),
+            emotion = state.emotion.copy(mood = mood, attention = PetAttention.Forward),
+            need = state.need.copy(lastInteractionAtMs = nowMs, isSleeping = false),
+            agent = AgentState.Idle,
+            interaction = state.interaction.copy(isPressed = false),
+        )
     }
 
     private fun BodyState.withTransient(animation: String, nowMs: Long, durationMs: Long): BodyState {

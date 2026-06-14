@@ -8,13 +8,20 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Rect
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.kazumaproject.petagent.agent.StubAgentCore
+import com.kazumaproject.petagent.game.FoodCatalog
+import com.kazumaproject.petagent.game.PetCareRepository
+import com.kazumaproject.petagent.game.PetCareUiState
+import com.kazumaproject.petagent.game.PrimaryNeed
+import com.kazumaproject.petagent.overlay.PetCareOverlayController
 import com.kazumaproject.petagent.overlay.PetOverlayController
 import com.kazumaproject.petagent.petpack.PetCatalogLoader
 import com.kazumaproject.petagent.petpack.PetPack
@@ -23,8 +30,12 @@ import com.kazumaproject.petagent.runtime.PetRuntime
 
 class PetForegroundService : Service(), PetOverlayController.Listener {
     private var overlayController: PetOverlayController? = null
+    private var careOverlayController: PetCareOverlayController? = null
     private var runtime: PetRuntime? = null
     private var agentCore: StubAgentCore? = null
+    private var currentPetPack: PetPack? = null
+    private var latestCareUiState: PetCareUiState? = null
+    private var latestPetBounds: Rect? = null
     private var isMinimized = false
 
     override fun onCreate() {
@@ -58,20 +69,44 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
         super.onDestroy()
     }
 
-    override fun onPetTapped() {
+    override fun onPetTapped(petBounds: Rect) {
+        latestPetBounds = petBounds
         runtime?.onPetTapped()
+        careOverlayController?.showCareMenuNearPet(petBounds)
     }
 
-    override fun onDragStarted() {
+    override fun onDragStarted(petBounds: Rect) {
+        latestPetBounds = petBounds
+        careOverlayController?.hideCareMenu()
         runtime?.onDragStarted()
     }
 
-    override fun onDragEnded() {
-        runtime?.onDragEnded()
+    override fun onPetMoved(petBounds: Rect) {
+        latestPetBounds = petBounds
+        latestCareUiState?.let { careUiState ->
+            careOverlayController?.updateNeedBubble(petBounds, careUiState)
+        }
     }
 
-    override fun onMinimizedChanged(minimized: Boolean) {
+    override fun onDragEnded(petBounds: Rect) {
+        latestPetBounds = petBounds
+        runtime?.onDragEnded()
+        latestCareUiState?.let { careUiState ->
+            careOverlayController?.updateNeedBubble(petBounds, careUiState)
+        }
+    }
+
+    override fun onMinimizedChanged(minimized: Boolean, petBounds: Rect) {
         isMinimized = minimized
+        latestPetBounds = petBounds
+        careOverlayController?.hideCareMenu()
+        if (minimized) {
+            careOverlayController?.hideNeedBubble()
+        } else {
+            latestCareUiState?.let { careUiState ->
+                careOverlayController?.updateNeedBubble(petBounds, careUiState)
+            }
+        }
         runtime?.onMinimizedChanged(minimized)
         updateNotification()
     }
@@ -92,10 +127,27 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
             overlay.show()
             val view = overlay.view ?: error("Overlay view was not created.")
             val agent = StubAgentCore()
-            val petRuntime = PetRuntime(view, agent)
+            val careOverlay = createCareOverlayController()
+            val petRuntime = PetRuntime(
+                petView = view,
+                agentCore = agent,
+                petId = settings.petPack.manifest.petId,
+                species = settings.petPack.manifest.species,
+                careRepository = PetCareRepository(this),
+                onCareUiStateChanged = { uiState ->
+                    latestCareUiState = uiState
+                    val bounds = latestPetBounds
+                    if (!isMinimized && bounds != null) {
+                        careOverlayController?.updateNeedBubble(bounds, uiState)
+                    }
+                },
+            )
 
             overlayController = overlay
+            careOverlayController = careOverlay
             agentCore = agent
+            currentPetPack = settings.petPack
+            latestPetBounds = overlay.currentPetBounds()
             runtime = petRuntime
             petRuntime.start()
         } catch (error: Throwable) {
@@ -123,6 +175,7 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
                 clearPetRuntime()
                 startPet(selectedSettings)
             } else {
+                currentPetPack = selectedSettings.petPack
                 overlay.updateSize(selectedSettings.sizeDp)
                 updateNotification()
             }
@@ -144,13 +197,84 @@ class PetForegroundService : Service(), PetOverlayController.Listener {
     }
 
     private fun clearPetRuntime() {
+        careOverlayController?.removeAll()
+        careOverlayController = null
         runtime?.stop()
         runtime = null
         agentCore?.unload()
         agentCore = null
         overlayController?.remove()
         overlayController = null
+        currentPetPack = null
+        latestCareUiState = null
+        latestPetBounds = null
         isMinimized = false
+    }
+
+    private fun createCareOverlayController(): PetCareOverlayController {
+        return PetCareOverlayController(
+            context = this,
+            windowManager = getSystemService(WindowManager::class.java),
+            onFoodClicked = {
+                val petPack = currentPetPack
+                if (petPack != null) {
+                    val food = FoodCatalog.recommendedForSpecies(petPack.manifest.species)
+                    latestPetBounds?.let { bounds ->
+                        careOverlayController?.playItemFlyAnimation(bounds, food.iconText)
+                    }
+                    runtime?.giveFood(food.id)
+                }
+                careOverlayController?.hideCareMenu()
+            },
+            onWaterClicked = {
+                latestPetBounds?.let { bounds ->
+                    careOverlayController?.playItemFlyAnimation(bounds, "💧")
+                }
+                runtime?.giveWater()
+                careOverlayController?.hideCareMenu()
+            },
+            onPlayClicked = {
+                latestPetBounds?.let { bounds ->
+                    careOverlayController?.playItemFlyAnimation(bounds, "🎾")
+                }
+                runtime?.play()
+                careOverlayController?.hideCareMenu()
+            },
+            onNeedClicked = { need ->
+                handleNeedClicked(need)
+            },
+        )
+    }
+
+    private fun handleNeedClicked(need: PrimaryNeed) {
+        when (need) {
+            PrimaryNeed.Water -> {
+                latestPetBounds?.let { bounds ->
+                    careOverlayController?.playItemFlyAnimation(bounds, "💧")
+                }
+                runtime?.giveWater()
+            }
+            PrimaryNeed.Food -> {
+                val petPack = currentPetPack
+                if (petPack != null) {
+                    val food = FoodCatalog.recommendedForSpecies(petPack.manifest.species)
+                    latestPetBounds?.let { bounds ->
+                        careOverlayController?.playItemFlyAnimation(bounds, food.iconText)
+                    }
+                    runtime?.giveFood(food.id)
+                }
+            }
+            PrimaryNeed.Play -> {
+                latestPetBounds?.let { bounds ->
+                    careOverlayController?.playItemFlyAnimation(bounds, "🎾")
+                }
+                runtime?.play()
+            }
+            PrimaryNeed.Sleep -> {
+                // MVP: sleep need is informational; tapping it does not change care state yet.
+            }
+        }
+        careOverlayController?.hideCareMenu()
     }
 
     private fun promoteToForeground() {
